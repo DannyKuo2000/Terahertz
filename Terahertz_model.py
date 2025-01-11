@@ -6,12 +6,12 @@ import torch.optim as optim
 import torch.nn as nn
 
 class DiffractiveLayer(torch.nn.Module):
-    def __init__(self, size = 32): # original: size = 36
+    def __init__(self, frequency = 0.4e12, size = 32): # original: size = 36
         super(DiffractiveLayer, self).__init__()
         self.dx = 0.005       # resolution (m)
         self.size = size       # number of optical neurons in one dimension
-        self.ll = 0.01        # layer length (m)
-        self.wl = 3e8/0.4e12     # wavelength = light speed / frequency (m)
+        #self.ll = 0.01        # layer length (m)
+        self.wl = 3e8 / frequency    # wavelength = light speed / frequency (m)
         self.z = 0.01         # distance between two layers (m)
 
     def forward(self, E):
@@ -33,7 +33,7 @@ class DiffractiveLayer(torch.nn.Module):
 
         # 考慮兩層ONN之間的距離
         jkz = torch.from_numpy(np.exp(1j * kz * self.z)).to(device)
-        # 在frequency domain相乘, 等於在space domain做convolution
+        # 在frequency domain相乘, 等於在space domain做convolution (公式需驗證)
         angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c * jkz))
 
         return angular_spectrum
@@ -44,14 +44,14 @@ class Net(torch.nn.Module):
         # torch.nn.Parameter: 允許在反向傳播中更新
         # torch.from_numpy(): 將NumPy轉換成PyTorch
         # random initialized [0, 2*pi] 每層大小為size, 共num_layers, call: self.phase1[i]
-        self.phase1 = [torch.nn.Parameter(torch.from_numpy(2 * np.pi * np.random.random(size = (32, 32)).astype("float64")))for _ in range(num_layers)] # original: size = (36, 36)
+        self.phase1 = [torch.nn.Parameter(torch.from_numpy(2 * np.pi * np.random.random(size = (32, 32)).astype("float32")))for _ in range(num_layers)] # original: size = (36, 36)
         # 將 self.phase1[i] 的每個張量註冊到模型中，使它們可以被 PyTorch 的自動微分系統追蹤。
         for i in range(num_layers):
             self.register_parameter("phase1" + "_" + str(i), self.phase1[i])
         # torch.nn.ModuleList：用list存許多層DiffractiveLayer(), PyTorch的特殊list
         self.diffractive_layers1 = torch.nn.ModuleList([DiffractiveLayer() for _ in range(num_layers)])
 
-        # last_diffractive_layer1: 單獨定義最後一層(沒用到)
+        # 單獨定義最後一層(沒用到)
         # self.last_diffractive_layer1 = DiffractiveLayer()
 
         # 定義一個 Softmax 函數(沒用到)
