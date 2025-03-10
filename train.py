@@ -5,6 +5,8 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from Terahertz_model import Autoencoder
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # 設定超參數
 batch_size = 64
 epochs = 20
@@ -29,7 +31,7 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # 創建 Autoencoder 模型
-model = Autoencoder(input_dim, latent_dim).cuda()  # 使用 GPU，如果有的話
+model = Autoencoder(input_dim, latent_dim).to(device)  # 使用 GPU，如果有的話
 criterion = nn.MSELoss()  # 使用均方誤差損失函數
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)  # 使用 Adam 優化器
 
@@ -39,7 +41,7 @@ def train_model():
     for epoch in range(epochs):
         running_loss = 0.0
         for batch_idx, (data, _) in enumerate(train_loader):
-            data = data.view(-1, input_dim).cuda()  # 扁平化圖像為一維向量並傳遞到 GPU
+            data = data.view(-1, input_dim).to(device)  # 扁平化圖像為一維向量並傳遞到 GPU
             optimizer.zero_grad()
 
             # 前向傳播
@@ -70,7 +72,7 @@ def test_model():
     with torch.no_grad():
         total_loss = 0.0
         for data, _ in test_loader:
-            data = data.view(-1, input_dim).cuda()
+            data = data.view(-1, input_dim).to(device)
             reconstructed = model(data)
             loss = criterion(reconstructed, data)
             total_loss += loss.item()
