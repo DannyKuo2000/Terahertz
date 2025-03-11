@@ -9,15 +9,21 @@ from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 設定超參數
+"""
+註解符號說明:
+    ###說明概念
+    #說明程式碼
+"""
+
+# Set up Hyperparameters
 batch_size = 64
 epochs = 10
 learning_rate = 0.001
 latent_dim = 8*8
-input_dim = (28 * 4) * (28 * 4)  # Fashion MNIST 是28x28的圖像
-output_dim = 28 * 28 
+input_dim = (28 * 4) * (28 * 4)  # fit input size
+output_dim = 28 * 28  # Fashion MNIST 是28x28的圖像
 
-# 定義資料增強和轉換
+# define data augmentation 
 transform = transforms.Compose([
     transforms.Resize((28*4, 28*4)), # 貼齊encoder大小
     transforms.ToTensor(),
