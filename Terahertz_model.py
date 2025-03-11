@@ -8,19 +8,26 @@ import torch.nn as nn
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 """
+Relative parameters:
+    Refractive index: 1.7
+    Absorption coefficient: 1e-5
+    Sub THz: 0.2e12
+"""
+
+"""
 註解符號說明:
-###說明概念
-#說明程式碼
+    ###說明概念
+    #說明程式碼
 """
 
 
 class DiffractiveLayer(torch.nn.Module):
-    def __init__(self, frequency = 0.4e12, size = 32): # original: size = 36
+    def __init__(self, frequency = 0.2e12, num_size = 28*4): # original: size = 36
         super(DiffractiveLayer, self).__init__()
-        self.dx = 0.005       # resolution (m)
-        self.size = size       # number of optical neurons in one dimension
+        self.dx = 0.00075       # resolution (m)
+        self.size = num_size       # number of optical neurons in one dimension
         #self.ll = 0.01        # layer length (m)
-        self.wl = 3e8 / frequency    # wavelength = light speed / frequency (m)
+        self.wl = 2.998e8 / frequency    # wavelength = light speed / frequency (m)
         self.z = 0.01         # distance between two layers (m)
 
     def forward(self, E):
@@ -60,12 +67,12 @@ class DiffractiveLayer(torch.nn.Module):
         return angular_spectrum
 
 class Net(torch.nn.Module):
-    def __init__(self, num_layers=3):
+    def __init__(self, num_layers=3, num_size=28*4):
         super(Net, self).__init__()
         # random initialized [0, 2*pi] 每層大小為size, 共num_layers, call: self.phase1[i]
         # torch.from_numpy(): 將NumPy轉換成PyTorch
         # torch.nn.Parameter: 允許在反向傳播中更新
-        self.phase1 = [torch.nn.Parameter(torch.from_numpy(2 * np.pi * np.random.random(size = (32, 32)).astype("float32")))for _ in range(num_layers)] # original: size = (36, 36)
+        self.phase1 = [torch.nn.Parameter(torch.from_numpy(2 * np.pi * np.random.random(size = (num_size, num_size))))for _ in range(num_layers)] # original: size = (36, 36), .astype("float32")
 
         ### 將 self.phase1[i] 的每個張量註冊到模型中，使它們可以被 PyTorch 的自動微分系統追蹤。
         for i in range(num_layers):
@@ -85,6 +92,7 @@ class Net(torch.nn.Module):
         for index, layer in enumerate(self.diffractive_layers_block1):
             # 自動調用forward() (PyTorch特性)
             # 把layers組的每層layer輪流抓出來算
+            #print(f"x shape in ONN: {x.shape}")
             temp = layer(x)
 
             # 這裡才是實際印製產生的phase變化
@@ -94,7 +102,7 @@ class Net(torch.nn.Module):
             x = temp * torch.exp(1j * exp_j_phase)
 
         output = torch.abs(x)
-        print(f"Encoded output size: {output.shape}")  # print output size
+        #print(f"Encoded output size: {output.shape}")  # print output size
         return output
 
 
@@ -111,6 +119,11 @@ class Decoder(nn.Module):
         self.sigmoid = nn.Sigmoid()             # 用於將輸出壓縮到[0,1]範圍
 
     def forward(self, x):
+        x = x.to(torch.float32)
+        #print(f"fc1 shape: {self.fc1.weight.shape}")
+        #print(f"x shape: {x.shape}")
+        #print(f"fc1 weight data type: {self.fc1.weight.dtype}")
+        #print(f"x data type: {x.dtype}")
         x = self.relu(self.fc1(x))  # 第一層經過ReLU激活
         x = self.relu(self.fc2(x))  # 第二層經過ReLU激活
         x = self.sigmoid(self.fc3(x))  # 最後一層經過Sigmoid激活，將值壓縮到[0,1]
@@ -118,14 +131,24 @@ class Decoder(nn.Module):
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, input_dim, latent_dim):
+    def __init__(self, input_dim, latent_dim, output_dim):
         super(Autoencoder, self).__init__()
         
+        # Net()的dim寫在前面了
         self.encoder = Net()  # 初始化Encoder
-        self.decoder = Decoder(latent_dim, input_dim)  # 初始化Decoder
+
+        ### 模擬攝影機將他拍成8*8大小，這裡用average壓縮 
+        # Sensor Layer: 平均池化將 (112, 112) 壓縮為 (8, 8)
+        self.sensor_size = 14  # 112 / 8 = 14
+
+        self.decoder = Decoder(latent_dim, output_dim)  # 初始化Decoder
 
     def forward(self, x):
         latent = self.encoder(x)  # Encoder輸出潛在向量
+
+        # Sensor Layer: 空間平均池化
+        latent = F.avg_pool2d(latent, kernel_size=self.sensor_size)
+        latent = latent.view(latent.size(0), -1)
         reconstructed = self.decoder(latent)  # Decoder重建輸出
         return reconstructed
 
