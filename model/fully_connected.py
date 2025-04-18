@@ -12,14 +12,11 @@ Relative parameters:
     Refractive index: 1.7
     Absorption coefficient: 1e-5
     Sub THz: 0.2e12
-"""
 
-"""
 註解符號說明:
     ###說明概念
     #說明程式碼
 """
-
 
 class DiffractiveLayer(torch.nn.Module):
     def __init__(self, frequency = 0.2e12, num_size = 28*4): # original: size = 36
@@ -104,9 +101,6 @@ class Net(torch.nn.Module):
         output = torch.abs(x)
         #print(f"Encoded output size: {output.shape}")  # print output size
         return output
-
-
-
 class Decoder(nn.Module):
     def __init__(self, latent_dim, output_dim):
         super(Decoder, self).__init__()
@@ -151,7 +145,6 @@ class Autoencoder(nn.Module):
         latent = latent.view(latent.size(0), -1)
         reconstructed = self.decoder(latent)  # Decoder重建輸出
         return reconstructed
-
 
 
 

@@ -4,9 +4,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from model import Autoencoder
+from model import Net, Sensor, ConditionedUNet, DiffusionDecoder, Autoencoder  
 from tqdm import tqdm
 from dataset import get_dataloaders
+import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+import torchvision.utils as vutils
+import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -15,23 +19,115 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ###說明概念
     #說明程式碼
 """
+# ========= 訓練設定 =========
+writer = SummaryWriter(log_dir="runs/ddpm_autoencoder")
 
 # Set up Hyperparameters
 batch_size = 64
 epochs = 25
 learning_rate = 0.001
 latent_dim = 8*8
+timesteps = 1000
 input_dim = (28 * 4) * (28 * 4)  # fit input size
 output_dim = 28 * 28  # Fashion MNIST 是28x28的圖像
+img_shape = (1, 28, 28)
 
 # 載入 dataset
 train_loader, test_loader = get_dataloaders(batch_size=64)
 
 # 創建 Autoencoder 模型
-model = Autoencoder(input_dim, latent_dim, output_dim).to(device)  # 使用 GPU，如果有的話
+encoder = Net()
+sensor = Sensor()
+unet = ConditionedUNet(img_channels=1, cond_dim=latent_dim).to(device)
+decoder = DiffusionDecoder(model=unet, timesteps=timesteps, latent_shape=img_shape).to(device)
+
+model = Autoencoder(encoder, sensor, decoder).to(device)  # 使用 GPU，如果有的話
 criterion = nn.MSELoss()  # 使用均方誤差損失函數
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)  # 使用 Adam 優化器
 
+def train_model():
+    for epoch in range(epochs):
+        model.train() # 在 PyTorch 中，有些操作（如 dropout 或 batch normalization）在訓練和測試階段的行為會有所不同，所以在訓練時需要使用 train()。
+        epoch_loss = 0
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+            imgs, _ = batch # 通常是圖片（imgs）和對應的標籤（_，因為我們這裡的標籤不需要用到）。
+            imgs = imgs.to(device)
+            t = torch.randint(0, timesteps, (imgs.size(0),), device=device).long()
+            pred_noise, true_noise = model(imgs, t, mode='train')
+            loss = F.mse_loss(pred_noise, true_noise)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+
+        print(f"Epoch {epoch+1} Loss: {epoch_loss / len(train_loader):.4f}")
+
+        ### for tensorboard
+        # 記錄 loss
+        writer.add_scalar("Loss/train", epoch_loss / len(train_loader), epoch)
+
+        # 原圖與重建圖（最多顯示前 8 張）
+        with torch.no_grad():
+            sample_imgs = imgs[:8]
+            recon_imgs = model(sample_imgs, mode='sample')
+
+            img_grid = vutils.make_grid(sample_imgs.cpu(), normalize=True, scale_each=True)
+            recon_grid = vutils.make_grid(recon_imgs.cpu(), normalize=True, scale_each=True)
+
+            writer.add_image('Original', img_grid, global_step=epoch)
+            writer.add_image('Reconstructed', recon_grid, global_step=epoch)
+    writer.close()
+
+# 顯示原圖與重建圖
+def show_images(original, reconstructed):
+    fig, axs = plt.subplots(2, len(original), figsize=(12, 3))
+    for i in range(len(original)):
+        axs[0, i].imshow(original[i].cpu().squeeze(), cmap='gray')
+        axs[0, i].axis('off')
+        axs[1, i].imshow(reconstructed[i].cpu().squeeze(), cmap='gray')
+        axs[1, i].axis('off')
+    axs[0, 0].set_ylabel('Original', fontsize=12)
+    axs[1, 0].set_ylabel('Reconstructed', fontsize=12)
+    plt.tight_layout()
+    plt.show()
+
+def validate_model():
+    model.eval()
+    imgs, _ = next(iter(train_loader))
+    imgs = imgs[:8].to(device)
+    with torch.no_grad():
+        recon = model(imgs, mode='sample')
+
+if __name__ == "__main__":
+    train_model()
+    validate_model()
+
+
+''' 參考文件架構
+project_root/
+├── model/          # 模型相關的程式碼
+│   ├── __init__.py
+│   ├── model.py    # 定義神經網路結構
+│   ├── loss.py     # 定義損失函數
+│   ├── utils.py    # 其他輔助函數
+│   ├── checkpoints/ # 存放模型權重
+│       ├── best_model.pth
+│       ├── latest.pth
+├── train.py        # 訓練程式
+├── test.py         # 測試/驗證程式
+├── dataset/        # 數據處理相關
+│   ├── dataloader.py
+│   ├── preprocess.py
+├── configs/        # 超參數和設定檔
+│   ├── config.yaml
+├── scripts/        # 可能的執行腳本
+│   ├── run_training.sh
+│   ├── evaluate.sh
+├── logs/           # 訓練時的log文件
+'''
+
+'''
 # 訓練模型
 def train_model():
     model.train()
@@ -88,31 +184,5 @@ def validate_model():
     avg_val_loss = total_loss / len(test_loader)
     print(f"Validation Loss: {avg_val_loss:.4f}")
     return avg_val_loss
-
-
-if __name__ == "__main__":
-    train_model()
-    validate_model()
-
-''' 參考文件架構
-project_root/
-├── model/          # 模型相關的程式碼
-│   ├── __init__.py
-│   ├── model.py    # 定義神經網路結構
-│   ├── loss.py     # 定義損失函數
-│   ├── utils.py    # 其他輔助函數
-│   ├── checkpoints/ # 存放模型權重
-│       ├── best_model.pth
-│       ├── latest.pth
-├── train.py        # 訓練程式
-├── test.py         # 測試/驗證程式
-├── dataset/        # 數據處理相關
-│   ├── dataloader.py
-│   ├── preprocess.py
-├── configs/        # 超參數和設定檔
-│   ├── config.yaml
-├── scripts/        # 可能的執行腳本
-│   ├── run_training.sh
-│   ├── evaluate.sh
-├── logs/           # 訓練時的log文件
 '''
+
