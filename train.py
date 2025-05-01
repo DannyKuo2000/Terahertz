@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from model import Net, Sensor, ConditionedUNet, DiffusionDecoder, Autoencoder  
+from model import ONN, Sensor, ConditionedUNet, DiffusionDecoder, Autoencoder  
 from tqdm import tqdm
 from dataset import get_dataloaders
 import matplotlib.pyplot as plt
@@ -22,12 +22,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ========= 訓練設定 =========
 writer = SummaryWriter(log_dir="runs/ddpm_autoencoder")
 
-# Set up Hyperparameters
+# Training Hyperparameters
 batch_size = 64
 epochs = 25
 learning_rate = 0.001
 latent_dim = 8*8
 timesteps = 1000
+
+# Dataset Hyperparameters
 input_dim = (28 * 4) * (28 * 4)  # fit input size
 output_dim = 28 * 28  # Fashion MNIST 是28x28的圖像
 img_shape = (1, 28, 28)
@@ -36,7 +38,7 @@ img_shape = (1, 28, 28)
 train_loader, test_loader = get_dataloaders(batch_size=64)
 
 # 創建 Autoencoder 模型
-encoder = Net()
+encoder = ONN(num_layers=3, num_size=128, )
 sensor = Sensor()
 unet = ConditionedUNet(img_channels=1, cond_dim=latent_dim).to(device)
 decoder = DiffusionDecoder(model=unet, timesteps=timesteps, latent_shape=img_shape).to(device)
