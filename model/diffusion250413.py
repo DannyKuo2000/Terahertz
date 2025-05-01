@@ -17,9 +17,9 @@ Experiments Relative parameters:
     ###說明概念
     #說明程式碼
 """
-# ==== Diffraction Calculation ====
+# ==== Air Diffraction Calculation ====
 class DiffractiveLayer(nn.Module):
-    def __init__(self, dx=0.00075, num_size=28*4, ll=0.01, frequency=0.2e12, z=0.01): # original: size = 36
+    def __init__(self, dx=0.00075, num_size=128, ll=0.01, frequency=0.2e12, z=0.06): # original: size = 36
         super().__init__()
         self.dx = dx       # resolution (m)
         self.size = num_size       # number of optical neurons in one dimension
@@ -64,7 +64,7 @@ class DiffractiveLayer(nn.Module):
         return angular_spectrum
 
 # ==== ONN Model ====
-class Net(nn.Module):
+class ONN(nn.Module):
     def __init__(self, num_layers=3, num_size=28*4):
         super().__init__()
         # random initialized [0, 2*pi] 每層長寬各為size, 共num_layers, call: self.phase1[i]
@@ -125,73 +125,85 @@ class Sensor(nn.Module):
         return latent  # 2D output
 
 # ==== Sinusoidal Time Embedding ====
-def sinusoidal_embedding(timesteps, dim): # 用sinusoidal embedding方法把t接入
-    """
-    將整數 timestep 轉成 sinusoidal embedding 向量。
-    timesteps: shape [B]
-    return: shape [B, dim]
-    """
-    device = timesteps.device
-    half_dim = dim // 2  # 這裡是 32
-    emb = math.log(10000) / (half_dim - 1)  # 計算頻率比例
-    emb = torch.exp(torch.arange(half_dim, device=device) * -emb)  # shape: [32]
-    emb = timesteps.float().unsqueeze(1) * emb.unsqueeze(0)  # shape: [B, 32]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)  # shape: [B, 64]
-    return emb  # shape: (B, dim)
+class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.SiLU(),
+            nn.Linear(dim * 4, dim)
+        )
 
+    def forward(self, t):
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+        return self.mlp(emb)  # (B, dim)
 
-# ========= ResidualBlock =========
+# ========= Residual Block =========
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, padding=1),
             nn.GroupNorm(8, out_channels),  # 分組正規化，這是對卷積層的輸出進行正規化處理，可以加速訓練並提高模型性能。
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Conv2d(out_channels, out_channels, 3, padding=1),
             nn.GroupNorm(8, out_channels),
         )
         self.skip = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()  # 如果channel數一樣就identity
 
     def forward(self, x):
-        return F.relu(self.block(x) + self.skip(x))
+        return F.silu(self.block(x) + self.skip(x))
 
 
 # ========= Conditioned UNet =========
 class ConditionedUNet(nn.Module):
-    def __init__(self, noise_channel=1, t_dim=64, latent_side_length=8, inner_channels=32):
+    def __init__(self, noise_channel=1, t_dim=64, latent_channels=2, inner_channels=64):
         super().__init__()
-        self.latent_side_length = latent_side_length
-        self.t_dim = t_dim
+        self.time_mlp = TimeEmbedding(t_dim)
+        self.fc_t = nn.Linear(t_dim, inner_channels)
 
-        # cond 與 t 各自轉成 latent feature map (B, C, 8, 8)
-        self.fc_t = nn.Linear(t_dim, latent_side_length**2)
+        # input: (x + cond)  → shape: (B, noise_channel + latent_channels, 28, 28)
+        in_ch = noise_channel + latent_channels
 
-        # 處理步驟一
-        self.res1 = ResidualBlock(noise_channel + 2, inner_channels)
+        # Encoder path (downsampling)
+        self.down1 = ResidualBlock(in_ch, inner_channels)       # 28×28
+        self.pool1 = nn.MaxPool2d(2)                             # 14×14
+        self.down2 = ResidualBlock(inner_channels, inner_channels * 2)
+        self.pool2 = nn.MaxPool2d(2)                             # 7×7
 
-        # 上採樣：8×8 → 14×14
-        self.up1 = nn.Upsample(scale_factor=1.75, mode='bilinear', align_corners=False),  # 8 → 14
+        # Bottleneck
+        self.bottleneck = ResidualBlock(inner_channels * 2, inner_channels * 4)
 
-        # 處理步驟二
-        self.res2 = ResidualBlock(inner_channels, inner_channels // 2)
+        # Decoder path (upsampling)
+        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')  # 7×7 → 14×14
+        self.dec2 = ResidualBlock(inner_channels * 4 + inner_channels * 2, inner_channels * 2)
+        self.up1 = nn.Upsample(scale_factor=2, mode='nearest')  # 14×14 → 28×28
+        self.dec1 = ResidualBlock(inner_channels * 2 + inner_channels, inner_channels)
 
-        # 上採樣：14×14 → 28×28
-        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 14 → 28
-
-        # 最終輸出層
-        self.out = nn.Conv2d(inner_channels // 2, 1, kernel_size=3, padding=1)
+        # Output layer
+        self.out = nn.Conv2d(inner_channels, 1, kernel_size=3, padding=1)
 
     def forward(self, x, t, cond):
-        t_embed = sinusoidal_embedding(t, self.t_dim)
-        t_feat = self.fc_t(t_embed).view(-1, 1, self.latent_side_length, self.latent_side_length)
+        t_embed = self.time_mlp(t)  # (B, t_dim)
+        t_feat = self.fc_t(t_embed).view(-1, 1, 1, 1)  # (B, C, 1, 1)，再 broadcast 加入每層 feature
 
-        x = torch.cat([x, cond, t_feat], dim=1)         # (B, C+2, 8, 8)
-        x = self.res1(x)                                # (B, inner_C, 8, 8)
-        x = self.up1(x)                                 # (B, inner_C, 14, 14)
-        x = self.res2(x)                                # (B, inner_C//2, 14, 14)
-        x = self.up2(x)                                 # (B, inner_c//2, 28, 28)
-        return self.out(x)                              # (B, 1, 28, 28)
+        x = torch.cat([x, cond], dim=1)  # (B, C+cond, 28, 28)
+
+        # Encoder
+        x1 = self.down1(x + t_feat)
+        x2 = self.down2(self.pool1(x1) + t_feat)
+        bottleneck = self.bottleneck(self.pool2(x2) + t_feat)
+
+        # Decoder
+        y = self.dec2(torch.cat([self.up2(bottleneck), x2], dim=1) + t_feat)
+        y = self.dec1(torch.cat([self.up1(y), x1], dim=1) + t_feat)
+
+        return self.out(y)
 
 
 # ========= Diffusion Decoder =========
