@@ -2,9 +2,14 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
+
+"""
+Resize到128，跟學長的方法一樣
+"""
+
 def get_dataloaders(batch_size=64, num_workers=0):
     transform = transforms.Compose([
-        transforms.Resize((28 * 4, 28 * 4)),  # 確保尺寸一致
+        transforms.Resize((128, 128)),  # resize from 28 to 128
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,)),
     ])
