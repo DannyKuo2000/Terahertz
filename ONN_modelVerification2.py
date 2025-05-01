@@ -108,10 +108,11 @@ def plot_field(field, title_prefix="Field"):
 # ==== 測試 ====
 if __name__ == "__main__":
     num_size = 1024
+    num_layers = 1
     input_field = torch.zeros((num_size, num_size), dtype=torch.cfloat).to(device)
     input_field[num_size//2, num_size//2] = 1.0 + 0j  # 中央點光源
 
-    model = ONN(num_layers=1, num_size=num_size).to(device)
+    model = ONN(num_layers=num_layers, num_size=num_size).to(device)
     output = model(input_field)
 
     print("輸出張量大小:", output.shape)
