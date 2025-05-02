@@ -30,18 +30,16 @@ latent_dim = 8*8
 timesteps = 1000
 
 # Dataset Hyperparameters
-input_dim = (28 * 4) * (28 * 4)  # fit input size
-output_dim = 28 * 28  # Fashion MNIST 是28x28的圖像
-img_shape = (1, 28, 28)
+img_shape = (1, 128, 128)
 
 # 載入 dataset
-train_loader, test_loader = get_dataloaders(batch_size=64)
+train_loader, test_loader = get_dataloaders(batch_size=batch_size)
 
 # 創建 Autoencoder 模型
-encoder = ONN(num_layers=3, num_size=128, )
+encoder = ONN(num_layers=3, num_size=128)
 sensor = Sensor()
-unet = ConditionedUNet(img_channels=1, cond_dim=latent_dim).to(device)
-decoder = DiffusionDecoder(model=unet, timesteps=timesteps, latent_shape=img_shape).to(device)
+unet = ConditionedUNet(img_channels=1, t_dim=64, latent_channels=1, base_channels=64).to(device)
+decoder = DiffusionDecoder(model=unet, timesteps=timesteps, image_shape=img_shape).to(device)
 
 model = Autoencoder(encoder, sensor, decoder).to(device)  # 使用 GPU，如果有的話
 criterion = nn.MSELoss()  # 使用均方誤差損失函數
