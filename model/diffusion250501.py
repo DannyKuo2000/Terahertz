@@ -60,7 +60,6 @@ class DiffractiveLayer(nn.Module):
         angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c * self.jkz))
         return angular_spectrum
 
-
 # ==== Material Phase Control ====
 class MaterialLayer(nn.Module):
     def __init__(self, num_size=128):
@@ -68,13 +67,12 @@ class MaterialLayer(nn.Module):
         init_phase = 2 * np.pi * np.random.rand(num_size, num_size)
 
         # 這裡才是實際印製產生的phase變化
-        self.phase = nn.Parameter(torch.from_numpy(init_phase).float())
+        self.phase = nn.Parameter(torch.from_numpy(init_phase))
 
     def forward(self, x):
         # 加入印製的相位調整
         phase_mask = torch.exp(1j * self.phase)
         return x * phase_mask
-
 
 # ==== ONN ensemblance ====
 class ONN(nn.Module):
@@ -89,9 +87,10 @@ class ONN(nn.Module):
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)
+        print(x.dtype)
         return x
     
-# ==== ONN to Sensor Calculation ==== (計算ONN出來到camera的路徑)
+# ==== ONN to Sensor Calculation ==== (計算ONN出來到camera後經過air or lens路徑)
 class Sensor(nn.Module):
     def __init__(self, output_dim=128):
         super().__init__()
@@ -114,13 +113,20 @@ class Sensor(nn.Module):
         latent = latent[:, :, (latent.size(2)-width)//2:(latent.size(2)+width)//2, (latent.size(3)-width)//2:(latent.size(3)+width)//2]  # 裁切中間 28x28
         print(f"latent size: {latent.size()}")
         """
-        return latent  # 2D output
+        if latent.dtype != torch.float32:  # change dtype to consist with encoder
+            latent = latent.to(torch.float32)
+        return latent.float()   # 2D output
 
 # ==== Sinusoidal Time Embedding ====
 class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
+        half_dim = dim // 2
+        emb_scale = math.log(10000) / (half_dim - 1)
+        inv_freq = torch.exp(torch.arange(half_dim) * -emb_scale)
+        self.register_buffer('inv_freq', inv_freq)  # register_buffer()用來註冊「模型中要跟著儲存，但不訓練的張量」
+
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim * 4),
             nn.SiLU(),
@@ -128,79 +134,127 @@ class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
         )
 
     def forward(self, t):
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
-        emb = t[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+        t = t.to(self.inv_freq.device).unsqueeze(1)  # t shape: (B,) → (B, 1), to: move to same device
+        freqs = t * self.inv_freq.unsqueeze(0)  # (B, half_dim)
+        emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=1)  # (B, dim)
         return self.mlp(emb)  # (B, dim)
+
+
 
 # ========= Residual Block =========
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, t_dim, bottleneck_ratio=0.5):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=1),
-            nn.GroupNorm(8, out_channels),  # 分組正規化，這是對卷積層的輸出進行正規化處理，可以加速訓練並提高模型性能。
+        mid_channels = int(out_channels * bottleneck_ratio)
+
+        # 時間嵌入線性層
+        self.time_mlp = nn.Sequential(
             nn.SiLU(),
-            nn.Conv2d(out_channels, out_channels, 3, padding=1),
-            nn.GroupNorm(8, out_channels),
+            nn.Linear(t_dim, mid_channels)
         )
-        self.skip = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()  # 如果channel數一樣就identity
 
-    def forward(self, x):
-        return F.silu(self.block(x) + self.skip(x))
+        # Bottleneck 結構
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1)
+        self.norm1 = nn.GroupNorm(8, mid_channels)  # 根據channels分組進行normalization
 
+        self.conv2 = nn.Conv2d(mid_channels, mid_channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(8, mid_channels)
+
+        self.conv3 = nn.Conv2d(mid_channels, out_channels, kernel_size=1)
+        self.norm3 = nn.GroupNorm(8, out_channels)
+
+        # 殘差分支
+        if in_channels != out_channels:
+            self.skip = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        else:
+            self.skip = nn.Identity()
+
+        self.activation = nn.SiLU()
+
+    def forward(self, x, t):
+        print(x.dtype)
+        print(self.conv1.weight.dtype)
+        h = self.conv1(x)
+        h = self.norm1(h)
+        h = self.activation(h)
+
+        # 多數時間感知模型都選擇在第一層 activation 之後加上時間 embedding。
+        # 如果太早加（如還沒卷積時），t_feat 的特徵尚無法與空間資訊對齊
+        # 如果太晚加（如輸出前），時間資訊就來不及參與中間層的建構
+        time_emb = self.time_mlp(t).view(t.size(0), -1, 1, 1)
+        h = h + time_emb
+
+        h = self.conv2(h)
+        h = self.norm2(h)
+        h = self.activation(h)
+
+        h = self.conv3(h)
+        h = self.norm3(h)
+
+        return self.activation(h + self.skip(x))
 
 # ========= Conditioned UNet =========
 class ConditionedUNet(nn.Module):
-    def __init__(self, noise_channel=1, t_dim=64, latent_channels=2, inner_channels=64):
+    def __init__(self, img_channels=1, t_dim=64, latent_channels=1, base_channels=64):
         super().__init__()
         self.time_mlp = TimeEmbedding(t_dim)
-        self.fc_t = nn.Linear(t_dim, inner_channels)
 
-        # input: (x + cond)  → shape: (B, noise_channel + latent_channels, 28, 28)
-        in_ch = noise_channel + latent_channels
+        in_ch = img_channels + latent_channels  # img_channel: noise channel
 
-        # Encoder path (downsampling)
-        self.down1 = ResidualBlock(in_ch, inner_channels)       # 28×28
-        self.pool1 = nn.MaxPool2d(2)                             # 14×14
-        self.down2 = ResidualBlock(inner_channels, inner_channels * 2)
-        self.pool2 = nn.MaxPool2d(2)                             # 7×7
+        # Encoder: 128 → 64 → 32 → 16 → 8
+        self.down1 = ResidualBlock(in_ch, base_channels, t_dim)
+        self.pool1 = nn.MaxPool2d(2)
 
-        # Bottleneck
-        self.bottleneck = ResidualBlock(inner_channels * 2, inner_channels * 4)
+        self.down2 = ResidualBlock(base_channels, base_channels * 2, t_dim)
+        self.pool2 = nn.MaxPool2d(2)
 
-        # Decoder path (upsampling)
-        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')  # 7×7 → 14×14
-        self.dec2 = ResidualBlock(inner_channels * 4 + inner_channels * 2, inner_channels * 2)
-        self.up1 = nn.Upsample(scale_factor=2, mode='nearest')  # 14×14 → 28×28
-        self.dec1 = ResidualBlock(inner_channels * 2 + inner_channels, inner_channels)
+        self.down3 = ResidualBlock(base_channels * 2, base_channels * 4, t_dim)
+        self.pool3 = nn.MaxPool2d(2)
 
-        # Output layer
-        self.out = nn.Conv2d(inner_channels, 1, kernel_size=3, padding=1)
+        self.down4 = ResidualBlock(base_channels * 4, base_channels * 8, t_dim)
+        self.pool4 = nn.MaxPool2d(2)
 
-    def forward(self, x, t, cond):
-        t_embed = self.time_mlp(t)  # (B, t_dim)
-        t_feat = self.fc_t(t_embed).view(-1, 1, 1, 1)  # (B, C, 1, 1)，再 broadcast 加入每層 feature
-
-        x = torch.cat([x, cond], dim=1)  # (B, C+cond, 28, 28)
-
-        # Encoder
-        x1 = self.down1(x + t_feat)
-        x2 = self.down2(self.pool1(x1) + t_feat)
-        bottleneck = self.bottleneck(self.pool2(x2) + t_feat)
+        self.bottleneck = ResidualBlock(base_channels * 8, base_channels * 8, t_dim)
 
         # Decoder
-        y = self.dec2(torch.cat([self.up2(bottleneck), x2], dim=1) + t_feat)
-        y = self.dec1(torch.cat([self.up1(y), x1], dim=1) + t_feat)
+        self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.dec4 = ResidualBlock(base_channels * 8 + base_channels * 8, base_channels * 4, t_dim)
 
-        return self.out(y)
+        self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.dec3 = ResidualBlock(base_channels * 4 + base_channels * 4, base_channels * 2, t_dim)
+
+        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.dec2 = ResidualBlock(base_channels * 2 + base_channels * 2, base_channels, t_dim)
+
+        self.up1 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.dec1 = ResidualBlock(base_channels + base_channels, base_channels, t_dim)
+
+        self.out = nn.Conv2d(base_channels, 1, kernel_size=3, padding=1)
+
+    def forward(self, x, t, cond):
+        t_embed = self.time_mlp(t)
+
+        x = torch.cat([x, cond], dim=1)  # noise + latent, (B, 2, 128, 128)
+        # Encoder
+        x1 = self.down1(x, t_embed)  # (B, C, 64, 64)
+        x2 = self.down2(self.pool1(x1), t_embed)  # (B, C, 32, 32)
+        x3 = self.down3(self.pool2(x2), t_embed)  # (B, C, 16, 16)
+        x4 = self.down4(self.pool3(x3), t_embed)  # (B, C, 8, 8)
+
+        bottleneck = self.bottleneck(self.pool4(x4), t_embed)  # (B, C, 8, 8)
+
+        # Decoder
+        y = self.dec4(torch.cat([self.up4(bottleneck), x4], dim=1), t_embed)  # (B, C, 16, 16)
+        y = self.dec3(torch.cat([self.up3(y), x3], dim=1), t_embed)  # (B, C, 32, 32)
+        y = self.dec2(torch.cat([self.up2(y), x2], dim=1), t_embed)  # (B, C, 64, 64)
+        y = self.dec1(torch.cat([self.up1(y), x1], dim=1), t_embed)  # (B, 2, 128, 128)
+
+        return self.out(y) # (B, 1, 128, 128)
 
 
 # ========= Diffusion Decoder =========
 class DiffusionDecoder(nn.Module):
-    def __init__(self, model, timesteps=1000, image_shape=(1, 28, 28), device='cpu'):
+    def __init__(self, model, timesteps=1000, image_shape=(1, 128, 128), device='cpu'):
         super().__init__()
         self.model = model.to(device)
         self.T = timesteps
@@ -211,8 +265,8 @@ class DiffusionDecoder(nn.Module):
         self.alphas = 1. - self.betas
         self.alpha_hat = torch.cumprod(self.alphas, dim=0)  # cumulative product
 
-    def forward_diffusion(self, x0, t, latent_shape):
-        noise = torch.randn_like(latent_shape)
+    def forward_diffusion(self, x0, t, latent):
+        noise = torch.randn_like(latent)
         alpha_hat_t = self.alpha_hat[t].view(-1, 1, 1, 1)
         x_t = torch.sqrt(alpha_hat_t) * x0 + torch.sqrt(1 - alpha_hat_t) * noise
         return x_t, noise
@@ -246,7 +300,7 @@ class Autoencoder(nn.Module):
         latent = self.sensor(latent)
         
         if mode == 'train':
-            x_t, noise = self.decoder.forward_diffusion(x, t)
+            x_t, noise = self.decoder.forward_diffusion(x, t, latent)
             noise_pred = self.decoder.model(x_t, t, latent)
             return noise_pred, noise
         elif mode == 'sample':
