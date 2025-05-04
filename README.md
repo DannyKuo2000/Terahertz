@@ -1,5 +1,5 @@
 # **Introduction:**
-This project is a ONN-based autoencoder model implementation. Optical Neural Network (ONN) is a kind of physical neural network computing with physical light. It is composed with multi-layers of diffraction layers, which would create different optical path difference in each physical neuron. And combining with diffraction, ONN　could act as electronic nerual network (ENN) but with less parameters and presentations. 
+This project is a ONN-based autoencoder model implementation. Optical Neural Network (ONN) is a kind of physical neural network computing with physical light. It is composed with multi-layers of diffraction layers, which would create different optical path difference in each physical neuron. And combining with diffraction, ONN could act as electronic nerual network (ENN) but with less parameters and presentations. 
 
 # Project structure:
 ```plaintext
