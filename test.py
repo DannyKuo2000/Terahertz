@@ -77,13 +77,16 @@ def visualize_results(model):
     axes[0, 0].set_ylabel("Original", fontsize=12)
     axes[1, 0].set_ylabel("Reconstructed", fontsize=12)
     plt.tight_layout()
+    image_path = os.path.join("results", f"{model_name}_image.png")
+    plt.savefig(image_path)  # 先儲存圖片
+    print("Image saved!")
     plt.show()
 
 if __name__ == "__main__":
-    model_path = "./weights/weight_20250504-203600_autoencoder_model"
+    model_path = "./checkpoints/weight_20250504-221802/autoencoder_model.pth"
     model = load_model(model_path)
     criterion = nn.MSELoss()
 
-    model_name = model_path.split("/")[-1]  # extract model name to name results
+    model_name = model_path.split("/")[-2]  # extract model name to name results
     test_model(model, criterion, model_name)
-    visualize_results(model)
+    visualize_results(model, model_name)

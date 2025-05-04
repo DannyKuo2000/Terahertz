@@ -72,7 +72,7 @@ def save_model(model, save_dir='./checkpoints', name='autoencoder_model.pth'):
         os.makedirs(weight_dir)
     
     # 儲存模型權重
-    weight_path = os.path.join(weight_dir, f"_{name}")
+    weight_path = os.path.join(weight_dir, f"{name}")
     torch.save(model.state_dict(), weight_path)
     print(f"Model saved at {weight_path}")
 
