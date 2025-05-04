@@ -251,7 +251,7 @@ class ConditionedUNet(nn.Module):
 
 # ========= Diffusion Decoder =========
 class DiffusionDecoder(nn.Module):
-    def __init__(self, model, timesteps=1000, image_shape=(1, 128, 128), device='cpu'):
+    def __init__(self, model, timesteps=1000, image_shape=(1, 128, 128), device='cuda'):
         super().__init__()
         self.model = model.to(device)
         self.T = timesteps
