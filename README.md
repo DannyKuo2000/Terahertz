@@ -35,34 +35,37 @@ Terahertz/
 Writing example:
 ##
 Body Text:
-```bash
+```
 python main.py --input data.jpg --output result.png
 ```
 
-```markdown
 **這是加粗文字** __這是加粗文字__
 *這是斜體文字* _這是斜體文字_
 
-
+##
 Unordered Lists:
-```markdown
 - 項目一
 - 項目二
     - 子項目一
     - 子項目二
 
+##
 Ordered Lists:
-```markdown
 1. 第一項
 2. 第二項
     1. 子項一
     2. 子項二
 
+##
 Code Blocks
-```python
+```
 def hello_world():
     print("Hello, world!")
 ```
 
-```markdown
+##
+可以用三個 - 或 * 來插入水平線來分隔內容。
+
+1234
 ---
+12345
