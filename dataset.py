@@ -31,9 +31,9 @@ def get_dataloaders(batch_size=64, num_workers=0, valid_ratio=0.1):
     """
     #full_train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
     #test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
-    train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    full_train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-    #train_dataset = datasets.EMNIST(root='./data', split='byclass', train=True, download=True, transform=transform)
+    #full_train_dataset = datasets.EMNIST(root='./data', split='byclass', train=True, download=True, transform=transform)
     #test_dataset = datasets.EMNIST(root='./data', split='byclass', train=False, download=True, transform=transform)
 
 
