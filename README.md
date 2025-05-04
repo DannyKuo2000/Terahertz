@@ -1,11 +1,8 @@
-# 
-**Introduction:**
-## 
+# **Introduction:**
 This project is a ONN-based autoencoder model implementation. Optical Neural Network (ONN) is a kind of physical neural network computing with physical light. It is composed with multi-layers of diffraction layers, which would create different optical path difference in each physical neuron. And combining with diffraction, ONN　could act as electronic nerual network (ENN) but with less parameters and presentations. 
 
-# 
-Project structure:
-##
+# Project structure:
+```plaintext
 Terahertz/
 ├── model/          # 模型相關的程式碼
 │   ├── init.py
@@ -29,12 +26,10 @@ Terahertz/
 │   ├── run_training.sh
 │   ├── evaluate.sh
 ├── logs/           # 訓練時的log文件
+```
 
-
-# 
-**Writing example:**
-##
-Body Text:
+# **Writing example:**
+## Body Text:
 ```
 python main.py --input data.jpg --output result.png
 ```
@@ -42,28 +37,25 @@ python main.py --input data.jpg --output result.png
 **這是加粗文字** __這是加粗文字__
 *這是斜體文字* _這是斜體文字_
 
-##
-Unordered Lists:
+## Unordered Lists:
 - 項目一
 - 項目二
     - 子項目一
     - 子項目二
 
-##
-Ordered Lists:
+## Ordered Lists:
 1. 第一項
 2. 第二項
     1. 子項一
     2. 子項二
 
-##
-Code Blocks
+## Code Blocks
 ```
 def hello_world():
     print("Hello, world!")
 ```
 
-##
+## Horizontal Lines
 可以用三個 - 或 * 來插入水平線來分隔內容。
 
 1234
