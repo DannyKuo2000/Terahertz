@@ -141,38 +141,3 @@ def validate_model(epoch):
 if __name__ == "__main__":
     train_model()
     save_model(model)
-
-
-
-
-
-
-
-
-
-
-''' 參考文件架構
-Terahertz/
-├── model/          # 模型相關的程式碼
-│   ├── __init__.py
-│   ├── model.py    # 定義神經網路結構
-│   ├── loss.py     # 定義損失函數
-│   ├── utils.py    # 其他輔助函數
-│   ├── checkpoints/ # 存放模型權重
-│       ├── best_model.pth
-│       ├── latest.pth
-├── train.py        # 訓練程式
-├── test.py         # 測試/驗證程式
-├── data/        # 數據處理相關
-│   ├── dataloader.py
-│   ├── preprocess.py
-├── runs/           # 儲存train.py訓練完的Tensorboard可視化結果
-├── checkpoints/    # 儲存train.py訓練完的weights
-├── results/        # 儲存test.py測試完的results
-├── configs/        # 超參數和設定檔
-│   ├── config.yaml
-├── scripts/        # 可能的執行腳本
-│   ├── run_training.sh
-│   ├── evaluate.sh
-├── logs/           # 訓練時的log文件
-'''
