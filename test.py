@@ -6,6 +6,7 @@
 輸出結果
 '''
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import DataLoader
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 import json
 from tqdm import tqdm
 from dataset import get_dataloaders
+import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -33,7 +35,8 @@ def load_model(model_path):
     return model
 
 # 測試模型
-def test_model(model, criterion):
+def test_model(model, criterion, model_name):
+    model.eval()
     total_loss = 0.0
     with torch.no_grad():
         for imgs, _ in tqdm(test_loader, desc="Testing", ncols=100):
@@ -45,7 +48,14 @@ def test_model(model, criterion):
 
     avg_test_loss = total_loss / len(test_loader)
     print(f"Test Loss: {avg_test_loss:.4f}")
-    with open("test_results.json", "w") as f:
+
+
+    # 確保 results 資料夾存在
+    os.makedirs("./results", exist_ok=True)
+
+    # 依模型名稱儲存測試結果
+    result_path = os.path.join("results", f"{model_name}_test_results.json")
+    with open(result_path, "w") as f:
         json.dump({"test_loss": avg_test_loss}, f)
 
 # 顯示部分輸出圖片
@@ -57,7 +67,7 @@ def visualize_results(model):
     with torch.no_grad():
         recon_imgs = model(imgs, mode='sample')
 
-    fig, axes = plt.subplots(2, 5, figsize=(10, 4))
+    fig, axes = plt.subplots(2, 5, figsize=(10, 4))  # plot 2*5 subplot
     for i in range(5):
         axes[0, i].imshow(imgs[i].cpu().squeeze(), cmap="gray")
         axes[0, i].axis("off")
@@ -70,8 +80,10 @@ def visualize_results(model):
     plt.show()
 
 if __name__ == "__main__":
-    model_path = "./autoencoder_model.pth"
+    model_path = "./weights/weight_20250504-203600_autoencoder_model"
     model = load_model(model_path)
-    criterion = torch.nn.MSELoss()
-    test_model(model, criterion)
+    criterion = nn.MSELoss()
+
+    model_name = model_path.split("/")[-1]  # extract model name to name results
+    test_model(model, criterion, model_name)
     visualize_results(model)

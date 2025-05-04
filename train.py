@@ -2,14 +2,17 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
-from torchvision import transforms
+#from torch.utils.data import DataLoader
+#from torchvision import transforms
 from model import ONN, Sensor, ConditionedUNet, DiffusionDecoder, Autoencoder
 from tqdm import tqdm
 from dataset import get_dataloaders
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
+
+import os
+import time
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -44,28 +47,44 @@ model = Autoencoder(encoder, sensor, decoder).to(device)
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-# 小批量測試：預先測試模型是否能運行
+#==== Test model with sample data ====
 def test_model_with_sample_data():
     model.eval()
-    imgs, _ = next(iter(train_loader))
-    imgs = imgs[:8].to(device)
+    # next(iter()): 其實跟for()做的事一樣
+    imgs, _ = next(iter(train_loader))  # 從 train_loader 取出一個 batch 的圖像資料，這裡只取圖像 imgs，忽略標籤 _
+    imgs = imgs[:8].to(device)  # 只選前 8 張圖像，並傳送到指定的裝置
 
-    with torch.no_grad():
+    with torch.no_grad():  # 表示不需要計算梯度，用於inference
         pred_noise, true_noise = model(imgs, torch.randint(0, timesteps, (imgs.size(0),), device=device).long(), mode='train')
         print(f"Small batch test - Prediction shape: {pred_noise.shape}, True noise shape: {true_noise.shape}")
     model.train()
 
-# 儲存模型並測試重新加載
-def save_and_load_model():
-    torch.save(model.state_dict(), 'autoencoder_model.pth')
-    print("Model saved!")
+#==== Save model ====
+def save_model(model, save_dir='./checkpoints', name='autoencoder_model.pth'):
+    # 確保儲存路徑存在
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # 使用當前時間戳創建子資料夾
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    weight_dir = os.path.join(save_dir, f"weight_{timestamp}")
+    if not os.path.exists(weight_dir):
+        os.makedirs(weight_dir)
+    
+    # 儲存模型權重
+    weight_path = os.path.join(weight_dir, f"_{name}")
+    torch.save(model.state_dict(), weight_path)
+    print(f"Model saved at {weight_path}")
 
-    model_loaded = Autoencoder(encoder, sensor, decoder).to(device)
-    model_loaded.load_state_dict(torch.load('autoencoder_model.pth'))
-    model_loaded.eval()
-    print("Model loaded and ready for inference!")
+#==== Load model ====
+def load_model(model, weight_path):
+    # 加載模型權重
+    model.load_state_dict(torch.load(weight_path))
+    model.eval()
+    print(f"Model loaded from {weight_path}")
+    return model
 
-# 訓練與驗證函數
+#==== Train model ====
 def train_model():
     for epoch in range(epochs):
         model.train()
@@ -77,29 +96,33 @@ def train_model():
             pred_noise, true_noise = model(imgs, t, mode='train')
             loss = F.mse_loss(pred_noise, true_noise)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
+            optimizer.zero_grad()  # clear last grad
+            loss.backward()  # back propogation
+            optimizer.step()  # update parameters
+            epoch_loss += loss.item()  # add batch loss to epoch loss
 
         print(f"Epoch {epoch+1} Loss: {epoch_loss / len(train_loader):.4f}")
-        writer.add_scalar("Loss/train", epoch_loss / len(train_loader), epoch)
+        writer.add_scalar("Loss/train", epoch_loss / len(train_loader), epoch)  # TensorBoard writer
 
         validate_model(epoch)
 
-        with torch.no_grad():
-            sample_imgs = imgs[:8]
+        with torch.no_grad():  # no grad record
+            sample_imgs = imgs[:8] 
             recon_imgs = model(sample_imgs, mode='sample')
 
+            # 是 torchvision 提供的工具，用來將一組圖片排成一張網格圖
+            # scale_each=True：讓每張圖片單獨做 normalization，而不是整體
             img_grid = vutils.make_grid(sample_imgs.cpu(), normalize=True, scale_each=True)
             recon_grid = vutils.make_grid(recon_imgs.cpu(), normalize=True, scale_each=True)
 
+            # writer: 將原圖與重建圖儲存下來作為可視化輸出
+            # global_step=epoch 會把這兩張圖歸到當前 epoch，使你能在 TensorBoard 中追蹤每個 epoch 的結果
             writer.add_image('Original', img_grid, global_step=epoch)
             writer.add_image('Reconstructed', recon_grid, global_step=epoch)
 
     writer.close()
 
-# 驗證模型
+#==== Validate model ====
 def validate_model(epoch):
     model.eval()
     epoch_loss = 0
@@ -116,9 +139,10 @@ def validate_model(epoch):
     writer.add_scalar("Loss/validation", epoch_loss / len(valid_loader), epoch)
 
 if __name__ == "__main__":
-    #test_model_with_sample_data()
     train_model()
-    save_and_load_model()
+    save_model(model)
+
+
 
 
 
@@ -128,7 +152,7 @@ if __name__ == "__main__":
 
 
 ''' 參考文件架構
-project_root/
+Terahertz/
 ├── model/          # 模型相關的程式碼
 │   ├── __init__.py
 │   ├── model.py    # 定義神經網路結構
@@ -139,9 +163,12 @@ project_root/
 │       ├── latest.pth
 ├── train.py        # 訓練程式
 ├── test.py         # 測試/驗證程式
-├── dataset/        # 數據處理相關
+├── data/        # 數據處理相關
 │   ├── dataloader.py
 │   ├── preprocess.py
+├── runs/           # 儲存train.py訓練完的Tensorboard可視化結果
+├── checkpoints/    # 儲存train.py訓練完的weights
+├── results/        # 儲存test.py測試完的results
 ├── configs/        # 超參數和設定檔
 │   ├── config.yaml
 ├── scripts/        # 可能的執行腳本

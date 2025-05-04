@@ -87,7 +87,6 @@ class ONN(nn.Module):
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)
-        print(x.dtype)
         return x
     
 # ==== ONN to Sensor Calculation ==== (計算ONN出來到camera後經過air or lens路徑)
@@ -172,8 +171,6 @@ class ResidualBlock(nn.Module):
         self.activation = nn.SiLU()
 
     def forward(self, x, t):
-        print(x.dtype)
-        print(self.conv1.weight.dtype)
         h = self.conv1(x)
         h = self.norm1(h)
         h = self.activation(h)
