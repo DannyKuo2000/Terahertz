@@ -24,11 +24,33 @@ _, _, test_loader = get_dataloaders(batch_size=64)
 
 # 載入模型
 def load_model(model_path):
-    encoder = ONN(num_layers=3, num_size=128)
-    sensor = Sensor()
-    unet = ConditionedUNet(img_channels=1, t_dim=64, latent_channels=1, base_channels=64).to(device)
-    decoder = DiffusionDecoder(model=unet, timesteps=1000, image_shape=(1, 128, 128)).to(device)
-    model = Autoencoder(encoder, sensor, decoder).to(device)
+    timesteps = 1000
+    img_shape = (1, 128, 128)
+    encoder = ONN(
+        num_layers=3, 
+        num_size=128
+    ).to(device)
+
+    sensor = Sensor().to(device)
+
+    unet = ConditionedUNet(
+        img_channels=1, 
+        t_dim=64, 
+        latent_channels=1, 
+        base_channels=64
+    ).to(device)
+
+    decoder = DiffusionDecoder(
+        model=unet, 
+        timesteps=timesteps, 
+        image_shape=img_shape
+    ).to(device)
+
+    model = Autoencoder(
+        encoder=encoder, 
+        decoder=decoder,
+        sensor=sensor, 
+    ).to(device)
 
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
@@ -59,7 +81,7 @@ def test_model(model, criterion, model_name):
         json.dump({"test_loss": avg_test_loss}, f)
 
 # 顯示部分輸出圖片
-def visualize_results(model):
+def visualize_results(model, model_name):
     model.eval()
     imgs, _ = next(iter(test_loader))
     imgs = imgs[:5].to(device)
