@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 #from torch.utils.data import DataLoader
 #from torchvision import transforms
-from model import ONN, Sensor, ConditionedUNet, DiffusionDecoder, Autoencoder
+from model import ONN, Sensor, SensorNoise, ConditionedUNet, DiffusionDecoder, Autoencoder
 from tqdm import tqdm
 from dataset import get_dataloaders
 #import matplotlib.pyplot as plt
