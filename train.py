@@ -15,35 +15,58 @@ import os
 import time
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+print(f"Device: {device}")
 """
 註解符號說明:
+    #====大段落=====
     ###說明概念
     #說明程式碼
 """
 
-# ========= 訓練設定 =========
+# ========= Training Set Up =========
 writer = SummaryWriter(log_dir="runs/ddpm_autoencoder")
 
-# Training Hyperparameters
+### Training Hyperparameters
 batch_size = 64
-epochs = 25
+epochs = 1
 learning_rate = 0.001
 timesteps = 1000
+patience = 5
 
-# Dataset Hyperparameters
+### Dataset Hyperparameters
 img_shape = (1, 128, 128)
 
-# 載入 dataset
+### Load dataset
 train_loader, valid_loader, test_loader = get_dataloaders(batch_size=batch_size)
 
-# 創建 Autoencoder 模型
-encoder = ONN(num_layers=3, num_size=128)
-sensor = Sensor()
-unet = ConditionedUNet(img_channels=1, t_dim=64, latent_channels=1, base_channels=64).to(device)
-decoder = DiffusionDecoder(model=unet, timesteps=timesteps, image_shape=img_shape).to(device)
-model = Autoencoder(encoder, sensor, decoder).to(device)
+### Model
+encoder = ONN(
+    num_layers=3, 
+    num_size=128
+).to(device)
 
+sensor = Sensor().to(device)
+
+unet = ConditionedUNet(
+    img_channels=1, 
+    t_dim=64, 
+    latent_channels=1, 
+    base_channels=64
+).to(device)
+
+decoder = DiffusionDecoder(
+    model=unet, 
+    timesteps=timesteps, 
+    image_shape=img_shape
+).to(device)
+
+model = Autoencoder(
+    encoder=encoder, 
+    decoder=decoder,
+    sensor=sensor, 
+).to(device)
+
+### Optimizer
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -85,7 +108,26 @@ def load_model(model, weight_path):
     return model
 
 #==== Train model ====
-def train_model():
+def train_model(patience=5):
+    """
+    ### check latent code statistic parameters for adjustment of SensorNoiseAdaptive() 
+    with torch.no_grad():
+        for batch in train_loader:
+            imgs, _ = batch
+            imgs = imgs.to(device)
+            latent_for_SNA = encoder(imgs)
+            latent_for_SNA = sensor(latent_for_SNA)
+
+            print("Latent mean:", latent_for_SNA.mean().item())
+            print("Latent std:", latent_for_SNA.std().item())
+            print("Latent min:", latent_for_SNA.min().item())
+            print("Latent max:", latent_for_SNA.max().item())
+            break  # 只看一個 batch 就好
+    """
+    ### parameters for early stop
+    best_loss = float('inf')  # set initial value as infinite
+    epochs_no_improve = 0
+
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0
@@ -101,11 +143,25 @@ def train_model():
             optimizer.step()  # update parameters
             epoch_loss += loss.item()  # add batch loss to epoch loss
 
-        print(f"Epoch {epoch+1} Loss: {epoch_loss / len(train_loader):.4f}")
-        writer.add_scalar("Loss/train", epoch_loss / len(train_loader), epoch)  # TensorBoard writer
+        avg_loss = epoch_loss / len(train_loader)
+        print(f"Epoch {epoch+1} Loss: {avg_loss:.4f}")
+        writer.add_scalar("Loss/train", avg_loss, epoch)  # TensorBoard writer
 
-        validate_model(epoch)
+        # === Validate ===
+        val_loss = validate_model(epoch)
 
+        # === Early stopping check ===
+        if val_loss < best_loss:
+            best_loss = val_loss
+            epochs_no_improve = 0
+            save_model(model)  # 可選：儲存最佳模型
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered at epoch {epoch+1}")
+                break
+
+        # === Logging images to Tensorboard ===
         with torch.no_grad():  # no grad record
             sample_imgs = imgs[:8] 
             recon_imgs = model(sample_imgs, mode='sample')
@@ -135,9 +191,11 @@ def validate_model(epoch):
             loss = F.mse_loss(pred_noise, true_noise)
             epoch_loss += loss.item()
 
-    print(f"Validation Loss at Epoch {epoch+1}: {epoch_loss / len(valid_loader):.4f}")
-    writer.add_scalar("Loss/validation", epoch_loss / len(valid_loader), epoch)
+    val_loss = epoch_loss / len(valid_loader)
+    print(f"Validation Loss at Epoch {epoch+1}: {val_loss:.4f}")
+    writer.add_scalar("Loss/validation", val_loss, epoch)
+    return val_loss
 
 if __name__ == "__main__":
-    train_model()
+    train_model(patience)
     save_model(model)

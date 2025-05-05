@@ -116,6 +116,61 @@ class Sensor(nn.Module):
             latent = latent.to(torch.float32)
         return latent.float()   # 2D output
 
+# ==== Sensor Noise Simulation
+class SensorNoise(nn.Module):
+    def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
+        super().__init__()
+        self.blur_kernel_size = blur_kernel_size
+        self.blur_sigma = blur_sigma
+        self.gray_mean = gray_mean  # gray background mean
+        self.gray_sigma = gray_sigma  # gray background sigma
+        self.gray_ratio = gray_ratio  # gray background ratio
+        self.noise_std = noise_std
+
+        # 預建立differentiable Gaussian kernel（固定參數部會進行訓練）
+        self.register_buffer('gaussian_kernel', self._create_gaussian_kernel())
+
+    def forward(self, x):
+        """
+        x: shape (B, C, H, W), dtype=torch.float32, range=[0,1]
+        模擬實測感測器影像效果：模糊、加灰背景、加雜訊
+        """
+        ### Gaussian blur
+        x = self._gaussian_blur(x)
+
+        ### Gray background: simulate sensor back light, making back light value around 0.55~0.65
+        # ~ N(0.6, 0.02), 0.6 ~= 155/255, 0.02 ~= 5/255
+        gray_bg = torch.randn_like(x) * self.gray_sigma + self.gray_mean  
+        # mix with ratio
+        x = (1 - self.gray_ratio) * x + self.gray_ratio * gray_bg
+
+        ### add Gaussian noise
+        # ~ N(0, 10/255)
+        noise = torch.randn_like(x) * self.noise_std
+        # constrain value between 0.0~1.0
+        x = torch.clamp(x + noise, 0.0, 1.0)  
+
+        return x
+
+    def _create_gaussian_kernel(self):
+        """建立一個可用於 conv2d 的 Gaussian kernel"""
+        k = self.blur_kernel_size
+        sigma = self.blur_sigma
+        coords = torch.arange(k) - k // 2
+        grid = coords.repeat(k).view(k, k)
+        x = grid
+        y = grid.t()
+        kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+        kernel = kernel.view(1, 1, k, k)  # shape = (1, 1, k, k)
+        kernel = kernel.repeat(3, 1, 1, 1)  # 對 RGB 每個 channel 分別卷積
+        return kernel
+
+    def _gaussian_blur(self, x):
+        """以 depthwise conv2d 實作高斯模糊"""
+        return F.conv2d(x, self.gaussian_kernel, padding=self.blur_kernel_size // 2, groups=3)
+
+
 # ==== Sinusoidal Time Embedding ====
 class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
     def __init__(self, dim):
@@ -286,16 +341,24 @@ class DiffusionDecoder(nn.Module):
 
 # ========= Autoencoder 整合 =========
 class Autoencoder(nn.Module):
-    def __init__(self, encoder, sensor, decoder):
+    def __init__(self, encoder, decoder, sensor=None, sensor_noise=None):
         super().__init__()
         self.encoder = encoder  # ONN and lens
         self.sensor = sensor  # terahertz sensor
+        self.sensor_noise = sensor_noise
         self.decoder = decoder  # diffusion model
 
     def forward(self, x, t=None, mode='train'):
         latent = self.encoder(x)
-        latent = self.sensor(latent)
+
+        # plug-and-play sensor module
+        if self.sensor is not None:
+            latent = self.sensor(latent)
         
+        # plug-and-play sensor noise module
+        if self.sensor_noise is not None:
+            latent = self.sensor_noise(latent)
+
         if mode == 'train':
             x_t, noise = self.decoder.forward_diffusion(x, t, latent)
             noise_pred = self.decoder.model(x_t, t, latent)
