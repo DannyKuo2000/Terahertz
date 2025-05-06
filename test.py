@@ -23,7 +23,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _, _, test_loader = get_dataloaders(batch_size=64)
 
 # 載入模型
-def load_model(model_path):
+def build_model():
+    model = ONN(
+        num_layers=3, 
+        num_size=128
+    ).to(device)
+    return model
+    """
+    ### Whole testing
     timesteps = 1000
     img_shape = (1, 128, 128)
     encoder = ONN(
@@ -51,7 +58,10 @@ def load_model(model_path):
         decoder=decoder,
         sensor=sensor, 
     ).to(device)
+    return model
+    """
 
+def load_model(model, model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     return model
@@ -106,9 +116,28 @@ def visualize_results(model, model_name):
 
 if __name__ == "__main__":
     model_path = "./checkpoints/weight_20250504-221802/autoencoder_model.pth"
-    model = load_model(model_path)
-    criterion = nn.MSELoss()
+    # 假設你已經有一個state_dict變數（通常是從torch.load('model.pth')得到）
+    state_dict = torch.load('model.pth')
 
+    # 假設ONN的參數是在state_dict中以 'onn.' 為prefix（例如 'onn.layers.0.weight'）
+    onn_state_dict = {k.replace('onn.', ''): v for k, v in state_dict.items() if k.startswith('onn.')}
+
+    # 建立新的ONN實例並載入該部分state_dict
+    onn = ONN(num_layers=3, num_size=128)
+    onn.load_state_dict(onn_state_dict)
+
+    # 測試用假資料
+    x = torch.randn(1, 1, 128, 128)
+    output = onn(x)
+
+
+    """
+    ### Whole testing
+    model_path = "./checkpoints/weight_20250504-221802/autoencoder_model.pth"
+    model = build_model
+    model = load_model(model, model_path)
+    criterion = nn.MSELoss()
     model_name = model_path.split("/")[-2]  # extract model name to name results
     test_model(model, criterion, model_name)
     visualize_results(model, model_name)
+    """
