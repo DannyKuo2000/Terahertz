@@ -8,3 +8,4 @@ from .diffusion250501 import ResidualBlock
 from .diffusion250501 import ConditionedUNet
 from .diffusion250501 import DiffusionDecoder
 from .diffusion250501 import Autoencoder
+from .diffusion250501 import LatentExamination

@@ -9,8 +9,8 @@ Resize到128，跟學長的方法一樣
 def get_dataloaders(batch_size=64, num_workers=0, valid_ratio=0.1):
     transform = transforms.Compose([
         transforms.Resize((128, 128)),  # resize from 28 to 128
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),
+        transforms.ToTensor(),  # make pixel value to [0, 1] and float
+        transforms.Normalize((0.5,), (0.5,)),  # make pixel value to [-1, 1], output = (input-0.5)/0.5
 
         ### 較不常使用的augmentation
         #transforms.RandomRotation(10)
