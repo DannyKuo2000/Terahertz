@@ -28,7 +28,7 @@ writer = SummaryWriter(log_dir="runs/ddpm_autoencoder")
 
 ### Training Hyperparameters
 batch_size = 64
-epochs = 1
+epochs = 50
 learning_rate = 0.001
 timesteps = 1000
 patience = 5

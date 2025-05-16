@@ -26,7 +26,7 @@ Experiments Relative parameters:
 Question: 把全反射在這裡考慮似乎有些奇怪
 """
 class DiffractiveLayer(nn.Module):
-    def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, z=0.06):
+    def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, z=0.1):
         super().__init__()
         self.dx = dx  # resolution (m)
         self.size = num_size  # number of optical neurons in one dimension
@@ -94,7 +94,7 @@ class Sensor(nn.Module):
     def __init__(self, output_dim=128):
         super().__init__()
         self.output_dim = output_dim
-        self.last_diffraction_layer = DiffractiveLayer(dx=0.00075, num_size=128, frequency=0.2e12, z=0.06)  # 理論上是一層空氣 但可能有鏡片
+        self.last_diffraction_layer = DiffractiveLayer(dx=0.00075, num_size=128, frequency=0.2e12, z=0.1)  # 理論上是一層空氣 但可能有鏡片
         # self.sensor_kernel_size = 14  # average pooling kernel size 
         # self.sensor_stride_size = 14
 
@@ -366,3 +366,23 @@ class Autoencoder(nn.Module):
         elif mode == 'sample':
             return self.decoder.reverse_sample(latent)
 
+# ==== Latent examination ====
+class LatentExamination(nn.Module):
+    def __init__(self, encoder, sensor=None, sensor_noise=None):
+        super().__init__()
+        self.encoder = encoder  # ONN and lens
+        self.sensor = sensor  # terahertz sensor
+        self.sensor_noise = sensor_noise
+
+    def forward(self, x, mode):
+        latent = self.encoder(x)
+
+        # plug-and-play sensor module
+        if self.sensor is not None:
+            latent = self.sensor(latent)
+        
+        # plug-and-play sensor noise module
+        if self.sensor_noise is not None:
+            latent = self.sensor_noise(latent)
+        
+        return latent
