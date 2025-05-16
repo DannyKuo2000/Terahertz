@@ -29,12 +29,12 @@ def get_dataloaders(batch_size=64, num_workers=0, valid_ratio=0.1):
     balance    | 47      | 112800   | 18800   | Merged similar letters (e.g., 'C' and 'c', a recommended balanced subset)
     letters    | 26      | 88800    | 14800   | Uppercase letters only (labeled A~Z)
     """
-    #full_train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
-    #test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
-    full_train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-    #full_train_dataset = datasets.EMNIST(root='./data', split='byclass', train=True, download=True, transform=transform)
-    #test_dataset = datasets.EMNIST(root='./data', split='byclass', train=False, download=True, transform=transform)
+    full_train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
+    test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
+    #full_train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    #test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    full_train_dataset = datasets.EMNIST(root='./data', split='byclass', train=True, download=True, transform=transform)
+    test_dataset = datasets.EMNIST(root='./data', split='byclass', train=False, download=True, transform=transform)
 
 
     ### Spliting training, validation and testing dataset
@@ -47,3 +47,6 @@ def get_dataloaders(batch_size=64, num_workers=0, valid_ratio=0.1):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     return train_loader, valid_loader, test_loader
+
+if __name__ == "__main__":
+    get_dataloaders()
