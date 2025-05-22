@@ -20,7 +20,7 @@ Experiments Relative parameters:
 
 # ==== Air Diffraction Calculation ====
 """
-這段forward主要考慮的是在空氣中傳播的疊加情形, ONN的影響會在Net()再額外加入。
+這段forward主要考慮的是在空氣中傳播的疊加情形, ONN的影響會在MaterialLayer()再額外加入。
 先將每個node傳播到下一層的kz大小寫出(前半部分), 再把ONN之間的距離考慮進去, 用以算出相位變化的convolution(jkz = torch.from_numpy...)
 最後乘上經過FFT過的input訊號(angular_spectrum = ...)
 Question: 把全反射在這裡考慮似乎有些奇怪
