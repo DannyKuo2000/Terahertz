@@ -7,24 +7,24 @@ from tqdm import tqdm  # 進度條套件
 
 # ====== Parameters ======
 # ubyte2PNG
-ubyte_folder = '../data/MNIST/raw/emnist-balanced-train-images-idx3-ubyte'  # MNIST 圖像檔
-pixels_28_folder = '../sample_data/MNIST/28pixels_PNG'  # 輸出資料夾
+ubyte_folder = '../data/EMNIST/raw/emnist-balanced-train-images-idx3-ubyte'  # MNIST 圖像檔
+pixels_28_folder = '../sample_data/EMNIST/28pixels_PNG'  # 輸出資料夾
 os.makedirs(pixels_28_folder, exist_ok=True)
 
 # PNG_connectedBlack
-pixels_28_connected_folder = '../sample_data/MNIST/28pixels_connected_PNG'
+pixels_28_connected_folder = '../sample_data/EMNIST/28pixels_connected_PNG'
 os.makedirs(pixels_28_connected_folder, exist_ok=True)
 
 # PNG_resize
-pixels_400_folder = '../sample_data/MNIST/400pixels_connected_PNG'
-scale_factor = 300/28
-border = 50  # pixel
+pixels_400_folder = '../sample_data/EMNIST/400pixels_connected_PNG'
+scale_factor = 250/28
+border = 75  # pixel
 resample_method = Image.BICUBIC
 os.makedirs(pixels_400_folder, exist_ok=True)
 
 # PNG_splice
-spliced_folder = '../sample_data/MNIST/spliced_PNG'
-padding = 100                          # 外圍 padding（像素）
+spliced_folder = '../sample_data/EMNIST/spliced_PNG'
+padding = 250                          # 外圍 padding（像素）
 images_per_group = 25                 # 每張拼接圖包含的圖片數
 grid_size = (5, 5)                    # 拼圖的行列數（rows, cols）
 os.makedirs(spliced_folder, exist_ok=True)
@@ -149,5 +149,5 @@ def PNG_splice(input_folder, output_folder):
 if __name__ == "__main__":
     #ubyte2PNG(ubyte_folder, pixels_28_folder)
     #PNG_connectedBlack(pixels_28_folder, pixels_28_connected_folder)
-    #PNG_resize(pixels_28_connected_folder, pixels_400_folder)
+    PNG_resize(pixels_28_connected_folder, pixels_400_folder)
     PNG_splice(pixels_400_folder, spliced_folder)

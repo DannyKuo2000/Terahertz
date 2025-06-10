@@ -18,37 +18,44 @@ Experiments Relative parameters:
     #說明程式碼
 """
 
-# ==== Air Diffraction Calculation ====
+# ====== Air Diffraction Calculation ======
 """
-這段forward主要考慮的是在空氣中傳播的疊加情形, ONN的影響會在MaterialLayer()再額外加入。
-先將每個node傳播到下一層的kz大小寫出(前半部分), 再把ONN之間的距離考慮進去, 用以算出相位變化的convolution(jkz = torch.from_numpy...)
-最後乘上經過FFT過的input訊號(angular_spectrum = ...)
-Question: 把全反射在這裡考慮似乎有些奇怪
+這段程式碼模擬的是：給定一個以 dx 為取樣解析度的波前（E），這個波前在空氣中傳播距離 z 後，到達前方某一平面時的波場分布。
+重點觀念：
+無限長的平面波之所以看起來沒有繞射，是因為都會有其他部分進行相消。如果我們只注意有限區域，其他部分視作被遮擋，繞射的情況就會出現
+| 可能修正方法               | 效果                                 |
+| -----------------------   | ------------------------------------ |
+| 降低 `dx`                 | 增加 Nyquist frequency，降低 aliasing |
+| 增加 `num_size`（區域大小）| 降低邊界效應與頻率截斷誤差              |
+| 初始波前 band-limiting     | 確保不超過模擬頻率範圍                 |
+| 使用 zero-padding         | 緩解邊界效應，讓 FFT 更精確            |
+| 使用 spectral method 判斷誤差 | 頻譜分析可以幫你預估保留了多少能量   |
+
 """
 class DiffractiveLayer(nn.Module):
-    def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, z=0.1):
+    def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, z=0.1, refractive_index=1):
         super().__init__()
         self.dx = dx  # resolution (m)
         self.size = num_size  # number of optical neurons in one dimension
         # self.ll = ll        # layer length (m)
         self.wl = 2.998e8 / frequency  # wavelength = light speed / frequency (m)
         self.z = z  # distance between two layers (m)
+        self.n = refractive_index
 
-        ### 預先計算 kz，因為與輸入無關，只取決於尺寸與參數
+        ### 計算一個node傳播在空氣中的convolution 
+        # 用angular spectrum技巧，預先計算 kz(因為與輸入無關)
         # 計算一維頻率軸fx, 範圍為[-1/(2*dx), 1/(2*dx)], 分成size份 (以0為中心，因為有用np.fft.fftshift)
         fx = np.fft.fftshift(np.fft.fftfreq(self.size, d=self.dx))
         fxx, fyy = np.meshgrid(fx, fx)  # 弄出網格
 
-        ### 算kz**2 = k**2 - kx**2 - ky**2
-        # 計算從一個node跑出的kz
-        argument = (2 * np.pi)**2 * ((1. / self.wl)**2 - fxx**2 - fyy**2)
-        tmp = np.sqrt(np.abs(argument))  # 算kz
+        ### 傅立葉轉換的頻率成分正好就是k: k_x=2*pi*f_x, k_y=2*pi*f_y (angular spectrum重要觀念)
+        # 計算從一個node跑出的kz，kz**2 = k**2 - kx**2 - ky**2
+        argument = (2 * np.pi * self.n)**2 * ((1. / self.wl)**2 - fxx**2 - fyy**2)
+        tmp = np.sqrt(np.abs(argument))
 
         # >=0: propagating, <0: evanescent(光學細節)
-        # 角度過大產生全反射, 剩下會exponential decay波跟平行於介面的evanescent波. 乘上i, 使其有exponential decay
         kz = np.where(argument >= 0, tmp, 1j * tmp)
 
-        ### 加入通過ONN後，在空氣中傳播的疊加：
         # 考慮兩層ONN之間的距離
         self.jkz = torch.from_numpy(np.exp(1j * kz * self.z)).to(device)
 
@@ -60,7 +67,92 @@ class DiffractiveLayer(nn.Module):
         angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c * self.jkz))
         return angular_spectrum
 
-# ==== Material Phase Control ====
+# ======= Interface Interaction Calculation ======
+class FresnelInterface(nn.Module):
+    def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, keep_reflection=False, complex_index=False, n1=1, n2=1.7):
+        """
+        擴充版 FresnelInterface 支援：
+        - 偏振分離計算（TE/TM） : 同時考慮兩種偏振態的 Fresnel 係數。
+        - 全反射處理（虛數透射角）: 若入射角超過臨界角，自動產生虛數的折射角，保留反射波。
+        - 複數折射率（模擬吸收介質）: 模擬吸收介質或金屬等材料（e.g. 𝑛=1.5+0.2𝑖）。
+        - 選擇性保留反射波 : 你可選擇是否返回反射波（如干涉模擬時很有用）。 
+        
+        參數說明：
+        dx                : 空間解析度（每點距離，m）
+        num_size          : 點陣大小（如128表示128x128）
+        n1, n2            : 折射率（可為複數）
+        frequency         : 波頻率（Hz）
+        keep_reflection   : 是否保留反射波
+        complex_index     : 是否使用複數折射率
+        """
+        super().__init__()
+        self.dx = dx
+        self.size = num_size
+        self.n1 = n1 if complex_index else complex(n1, 0.0)
+        self.n2 = n2 if complex_index else complex(n2, 0.0)
+        self.keep_reflection = keep_reflection
+        self.wl = 2.998e8 / frequency  # 真空波長
+        self.k0 = 2 * np.pi / self.wl  # 真空波數
+
+        # 建立頻率網格
+        fx = np.fft.fftshift(np.fft.fftfreq(self.size, d=self.dx))
+        fxx, fyy = np.meshgrid(fx, fx)
+        kx = 2 * np.pi * fxx
+        ky = 2 * np.pi * fyy
+        k_perp = np.sqrt(kx**2 + ky**2)
+
+        # 入射角的 sin(theta_i)
+        sin_theta_i = k_perp / (self.k0 * abs(self.n1))
+        sin_theta_i = np.clip(sin_theta_i, 0, 1)
+
+        # cos(theta_i), sin(theta_t), cos(theta_t)
+        cos_theta_i = np.sqrt(1 - sin_theta_i**2 + 0j)
+        sin_theta_t = (self.n1 / self.n2) * sin_theta_i
+        cos_theta_t = np.sqrt(1 - sin_theta_t**2 + 0j)  # 虛數表示全反射
+
+        # Fresnel TE (s) 和 TM (p) 偏振反射與透射係數
+        rs = (self.n1 * cos_theta_i - self.n2 * cos_theta_t) / (self.n1 * cos_theta_i + self.n2 * cos_theta_t)
+        ts = (2 * self.n1 * cos_theta_i) / (self.n1 * cos_theta_i + self.n2 * cos_theta_t)
+
+        rp = (self.n2 * cos_theta_i - self.n1 * cos_theta_t) / (self.n2 * cos_theta_i + self.n1 * cos_theta_t)
+        tp = (2 * self.n1 * cos_theta_i) / (self.n2 * cos_theta_i + self.n1 * cos_theta_t)
+
+        # 將 rs, rp, ts, tp 組成平均強度反射率與透射率
+        R = 0.5 * (np.abs(rs)**2 + np.abs(rp)**2)
+        T = 0.5 * (np.abs(ts)**2 + np.abs(tp)**2)
+
+        self.R = torch.from_numpy(R).to(torch.float32)  # 強度反射率
+        self.T = torch.from_numpy(T).to(torch.float32)  # 強度透射率
+
+        # 若保留複數振幅的反射波與透射波
+        self.rs = torch.from_numpy(rs).to(torch.complex64)
+        self.rp = torch.from_numpy(rp).to(torch.complex64)
+        self.ts = torch.from_numpy(ts).to(torch.complex64)
+        self.tp = torch.from_numpy(tp).to(torch.complex64)
+
+    def forward(self, E):
+        """
+        輸入 E 是一個空間波前（複數值的張量），尺寸為 (B, H, W) 或 (H, W)
+        根據設定回傳透射波，必要時也可同時回傳反射波
+        """
+        E_f = torch.fft.fftshift(torch.fft.fft2(E))
+
+        # 計算複數振幅平均的透射分量（可拓展為偏振分離）
+        t_avg = 0.5 * (self.ts + self.tp).to(E.device)
+        r_avg = 0.5 * (self.rs + self.rp).to(E.device)
+
+        E_f_transmitted = E_f * t_avg
+        E_f_reflected = E_f * r_avg
+
+        E_out = torch.fft.ifft2(torch.fft.ifftshift(E_f_transmitted))
+
+        if self.keep_reflection:
+            E_ref = torch.fft.ifft2(torch.fft.ifftshift(E_f_reflected))
+            return E_out, E_ref
+        else:
+            return E_out
+
+# ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
     def __init__(self, num_size=128):
         super().__init__()
@@ -74,7 +166,7 @@ class MaterialLayer(nn.Module):
         phase_mask = torch.exp(1j * self.phase)
         return x * phase_mask
 
-# ==== ONN ensemblance ====
+# ====== ONN ensemblance ======
 class ONN(nn.Module):
     def __init__(self, num_layers=3, num_size=128):
         super().__init__()
@@ -89,7 +181,7 @@ class ONN(nn.Module):
             x = layer(x)
         return x
     
-# ==== ONN to Sensor Calculation ==== (計算ONN出來到camera後經過air or lens路徑)
+# ====== ONN to Sensor Calculation ====== (計算ONN出來到camera後經過air or lens路徑)
 class Sensor(nn.Module):
     def __init__(self, output_dim=128):
         super().__init__()
@@ -116,7 +208,7 @@ class Sensor(nn.Module):
             latent = latent.to(torch.float32)
         return latent.float()   # 2D output
 
-# ==== Sensor Noise Simulation
+# ====== Sensor Noise Simulation ======
 class SensorNoise(nn.Module):
     def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
         super().__init__()
@@ -170,8 +262,13 @@ class SensorNoise(nn.Module):
         """以 depthwise conv2d 實作高斯模糊"""
         return F.conv2d(x, self.gaussian_kernel, padding=self.blur_kernel_size // 2, groups=3)
 
+# ==========================================
+    '''
+    The code below is for DNN-end
+    '''
+# ==========================================
 
-# ==== Sinusoidal Time Embedding ====
+# ====== Sinusoidal Time Embedding ======
 class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
     def __init__(self, dim):
         super().__init__()
@@ -195,7 +292,7 @@ class TimeEmbedding(nn.Module):  # 用sinusoidal embedding方法把t接入
 
 
 
-# ========= Residual Block =========
+# ====== Residual Block ======
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, t_dim, bottleneck_ratio=0.5):
         super().__init__()
@@ -245,7 +342,7 @@ class ResidualBlock(nn.Module):
 
         return self.activation(h + self.skip(x))
 
-# ========= Conditioned UNet =========
+# ====== Conditioned UNet ======
 class ConditionedUNet(nn.Module):
     def __init__(self, img_channels=1, t_dim=64, latent_channels=1, base_channels=64):
         super().__init__()
@@ -304,7 +401,7 @@ class ConditionedUNet(nn.Module):
         return self.out(y) # (B, 1, 128, 128)
 
 
-# ========= Diffusion Decoder =========
+# ====== Diffusion Decoder ======
 class DiffusionDecoder(nn.Module):
     def __init__(self, model, timesteps=1000, image_shape=(1, 128, 128), device='cuda'):
         super().__init__()
@@ -339,7 +436,7 @@ class DiffusionDecoder(nn.Module):
 
 
 
-# ========= Autoencoder 整合 =========
+# ====== Autoencoder Integration ======
 class Autoencoder(nn.Module):
     def __init__(self, encoder, decoder, sensor=None, sensor_noise=None):
         super().__init__()
@@ -366,7 +463,7 @@ class Autoencoder(nn.Module):
         elif mode == 'sample':
             return self.decoder.reverse_sample(latent)
 
-# ==== Latent examination ====
+# ====== Latent examination ======
 class LatentExamination(nn.Module):
     def __init__(self, encoder, sensor=None, sensor_noise=None):
         super().__init__()

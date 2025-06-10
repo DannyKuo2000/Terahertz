@@ -1,8 +1,8 @@
 @echo off
 REM ======= Parameters Setting =======
-set INPUT_DIR=..\sample_data\MNIST\spliced_PNG
-set OUTPUT_DIR=..\sample_data\MNIST\spliced_DXF
-set MAX_IMAGES=1
+set INPUT_DIR=..\sample_data\EMNIST\spliced_PNG
+set OUTPUT_DIR=..\sample_data\EMNIST\spliced_DXF
+set MAX_IMAGES=10
 
 REM ======= Make Output File =======
 if not exist "%OUTPUT_DIR%" (
@@ -22,13 +22,13 @@ for %%f in (%INPUT_DIR%\*.png) do (
     echo Processing: %%~nxf
 
     REM PNG → BMP, closed warning message!!!
-    magick "%%f" -monochrome "%OUTPUT_DIR%\%%~nf.bmp" 
+    magick "%%f" -monochrome "%OUTPUT_DIR%\%%~nf.bmp" >nul 2>&1
 
     REM BMP → SVG
-    potrace -s "%OUTPUT_DIR%\%%~nf.bmp" -o "%OUTPUT_DIR%\%%~nf.svg"  
+    potrace -s "%OUTPUT_DIR%\%%~nf.bmp" -o "%OUTPUT_DIR%\%%~nf.svg" >nul 2>&1  
 
     REM SVG → DXF
-    inkscape "%OUTPUT_DIR%\%%~nf.svg" --export-type="dxf" --export-filename="%OUTPUT_DIR%\%%~nf.dxf"  
+    inkscape "%OUTPUT_DIR%\%%~nf.svg" --export-type="dxf" --export-filename="%OUTPUT_DIR%\%%~nf.dxf" >nul 2>&1
 
     set /a COUNT+=1
 )
