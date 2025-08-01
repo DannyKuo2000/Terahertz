@@ -35,31 +35,32 @@ class MDTA(nn.Module):
     def __init__(self, dim, num_heads):
         super().__init__()
         self.num_heads = num_heads
-        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))  # 可學習溫度參數
 
-        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False) # 生成query key value
-        self.dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, stride=1, padding=1, groups=dim * 3) # Depth-wise 3*3 conv
+        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False)  # 1x1 conv → q, k, v
+        self.dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, padding=1, groups=dim * 3, bias=False)  # depth-wise conv
         self.project = nn.Conv2d(dim, dim, kernel_size=1, bias=False)
 
     def forward(self, x):
         B, C, H, W = x.shape
-        qkv = self.qkv(x) # [B, 3*C, H, W]
-        qkv = self.dwconv(qkv) # 同上，但融合局部空間資訊
-        q, k, v = qkv.chunk(3, dim=1) # 分割成 Query, Key, Value，各 [B, C, H, W]
+        qkv = self.qkv(x)             # [B, 3*C, H, W]
+        qkv = self.dwconv(qkv)        # [B, 3*C, H, W]
+        q, k, v = qkv.chunk(3, dim=1) # 各為 [B, C, H, W]
 
-        # reshape for attention: [B, heads, C//heads, H*W]
-        q = q.reshape(B, self.num_heads, C // self.num_heads, H * W)
-        k = k.reshape(B, self.num_heads, C // self.num_heads, H * W)
-        v = v.reshape(B, self.num_heads, C // self.num_heads, H * W)
+        # reshape: [B, heads, C//heads, H*W]
+        q = q.view(B, self.num_heads, C // self.num_heads, -1)  # [B, heads, C_head, HW]
+        k = k.view(B, self.num_heads, C // self.num_heads, -1)  # [B, heads, C_head, HW]
+        v = v.view(B, self.num_heads, C // self.num_heads, -1)  # [B, heads, C_head, HW]
 
-        q = F.normalize(q, dim=2) # 對 dimension 2 做 L2 normalization
-        k = F.normalize(k, dim=2)
-
-        attn = torch.matmul(q.transpose(-2, -1), k) * self.temperature  # 對調最後兩個維度, [B, heads, HW, HW]
+        # Transposed attention: q @ k^T → [B, heads, C_head, C_head]
+        attn = torch.matmul(q, k.transpose(-1, -2)) * self.temperature  # [B, heads, C_head, HW] @ [B, heads, HW, C_head] -> [B, heads, C_head, C_head]
         attn = F.softmax(attn, dim=-1)
 
-        out = torch.matmul(attn, v.transpose(-2, -1))  # [B, heads, HW, C//heads]
-        out = out.transpose(-2, -1).reshape(B, C, H, W)
+        # apply attention: attn @ v → [B, heads, C_head, HW]
+        out = torch.matmul(attn, v)  # [B, heads, C_head, HW]
+
+        # reshape back to [B, C, H, W]
+        out = out.view(B, C, H, W)
         return self.project(out)
 
 # --------------------------------------------------
