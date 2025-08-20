@@ -1,7 +1,7 @@
 
 # ========= Dataset =========
 DATASET_CONFIG = {
-    "dataset_name": "EMNIST",       # 可選 "MNIST" / "EMNIST" / "FashionMNIST"
+    "dataset_name": "MNIST",       # 可選 "MNIST" / "EMNIST" / "FashionMNIST"
     "emnist_split": "byclass",      # EMNIST 專用，其他 dataset 可忽略
     "batch_size": 64,
     "num_workers": 0,
@@ -51,8 +51,10 @@ RESTORMER_CONFIG = {
     "out_channels": 1,               # 輸出通道數
 
     # Embedding & Blocks
-    "embed_dim": 48,                 # 初始通道數
-    "num_blocks": [4, 6, 6, 8],      # 每層 RestormerBlock 數量
+    #"embed_dim": 48,                 # 初始通道數
+    "embed_dim": 16,
+    #"num_blocks": [4, 6, 6, 8],      # 每層 RestormerBlock 數量
+    "num_blocks": [2, 3, 3, 4],
     "num_heads":  [1, 2, 4, 8],      # Multi-head Attention 每層 head 數量
 
     # Training Stability
@@ -79,7 +81,7 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     "batch_size": 64,
-    "epochs": 30,
+    "epochs": 20,
     "learning_rate": 1e-3,
     "patience": 5,
 }

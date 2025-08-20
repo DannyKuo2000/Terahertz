@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -59,8 +60,8 @@ class DiffractiveLayer(nn.Module):
 class MaterialLayer(nn.Module):
     def __init__(self, num_size=128):
         super().__init__()
-        #init_phase = 2 * np.pi * np.random.rand(num_size, num_size)
-        init_phase = np.zeros((num_size, num_size), dtype=np.float32)
+        init_phase = 2 * np.pi * np.random.rand(num_size, num_size)
+        #init_phase = np.zeros((num_size, num_size), dtype=np.float32)
 
         # 這裡才是實際印製產生的phase變化
         self.phase = nn.Parameter(torch.from_numpy(init_phase).float())
@@ -88,27 +89,37 @@ class ONN(nn.Module):
 
 
 # ==== 視覺化工具 ====
-def plot_field(field, title_prefix="Field"):
-    amplitude = torch.abs(field).cpu().detach().numpy()
-    phase = torch.angle(field).cpu().detach().numpy()
+def plot_field(field, title_prefix="", save_path=None):
+    magnitude = torch.abs(field).detach().cpu().numpy()
+    phase = torch.angle(field).detach().cpu().numpy()
 
-    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-    axs[0].imshow(amplitude, cmap='viridis')
-    axs[0].set_title(f"{title_prefix} Amplitude")
-    axs[0].axis('off')
+    plt.figure(figsize=(10, 4))
 
-    axs[1].imshow(phase, cmap='twilight')
-    axs[1].set_title(f"{title_prefix} Phase")
-    axs[1].axis('off')
+    # Magnitude
+    plt.subplot(1, 2, 1)
+    plt.imshow(magnitude, cmap='gray')
+    plt.title(f"{title_prefix} Magnitude")
+    plt.colorbar()
+
+    # Phase
+    plt.subplot(1, 2, 2)
+    plt.imshow(phase, cmap='twilight')
+    plt.title(f"{title_prefix} Phase")
+    plt.colorbar()
 
     plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"已儲存圖片至 {save_path}")
+
     plt.show()
 
 
 # ==== 測試 ====
 if __name__ == "__main__":
     num_size = 1024
-    num_layers = 1
+    num_layers = 3
     input_field = torch.zeros((num_size, num_size), dtype=torch.cfloat).to(device)
     input_field[num_size//2, num_size//2] = 1.0 + 0j  # 中央點光源
 
@@ -116,5 +127,6 @@ if __name__ == "__main__":
     output = model(input_field)
 
     print("輸出張量大小:", output.shape)
-    plot_field(input_field, title_prefix="Input")
-    plot_field(output, title_prefix="Output")
+    os.makedirs("./ONN_modelVerification2_result", exist_ok=True)
+    plot_field(input_field, title_prefix="Input", save_path="./ONN_modelVerification2_result/Input.png")
+    plot_field(output, title_prefix="Output", save_path="./ONN_modelVerification2_result/Output_3layers_random.png")

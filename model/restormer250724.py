@@ -3,19 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # --------------------------------------------------
-# ✅ 可自定義參數 訓練時從config.py調整
-# --------------------------------------------------
-RESTORMER_CONFIG = {
-    "inp_channels",              # 輸入影像通道數（灰階 = 1）
-    "out_channels",              # 輸出影像通道數（灰階 = 1）
-    "embed_dim",                # 初始嵌入通道數
-    "num_blocks",     # 每個 Encoder/Decoder stage 的 block 數量
-    "num_heads",     # 對應每層的 attention head 數量
-    "layerscale_init",        # ★ CHANGED: LayerScale 初值（穩定深網）
-    "with_global_residual"    # ★ CHANGED: 是否做輸出全域殘差
-}
-
-# --------------------------------------------------
 # LayerNorm2d: 對每個通道做 LayerNorm（模仿官方實作）
 # --------------------------------------------------
 class LayerNorm2d(nn.Module):
