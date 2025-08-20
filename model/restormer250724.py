@@ -3,14 +3,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # --------------------------------------------------
-# ✅ 可自定義參數（建議調整這裡）
+# ✅ 可自定義參數 訓練時從config.py調整
 # --------------------------------------------------
 RESTORMER_CONFIG = {
-    "inp_channels": 1,        # 輸入影像通道數（灰階 = 1）
-    "out_channels": 1,       # 輸出影像通道數（灰階 = 1）
-    "embed_dim": 48,         # 初始嵌入通道數
-    "num_blocks": [4, 6, 6, 8],  # 每個 Encoder/Decoder stage 的 block 數量
-    "num_heads": [1, 2, 4, 8]    # 對應每層的 attention head 數量
+    "inp_channels",              # 輸入影像通道數（灰階 = 1）
+    "out_channels",              # 輸出影像通道數（灰階 = 1）
+    "embed_dim",                # 初始嵌入通道數
+    "num_blocks",     # 每個 Encoder/Decoder stage 的 block 數量
+    "num_heads",     # 對應每層的 attention head 數量
+    "layerscale_init",        # ★ CHANGED: LayerScale 初值（穩定深網）
+    "with_global_residual"    # ★ CHANGED: 是否做輸出全域殘差
 }
 
 # --------------------------------------------------
@@ -38,7 +40,7 @@ class MDTA(nn.Module):
         self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))  # 可學習溫度參數
 
         self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False)  # 1x1 conv → q, k, v
-        self.dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, padding=1, groups=dim * 3, bias=False)  # depth-wise conv
+        self.dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, padding=1, groups=dim * 3, bias=False)  # depth-wise conv (每個通道只跟自己conv)
         self.project = nn.Conv2d(dim, dim, kernel_size=1, bias=False)
 
     def forward(self, x):
@@ -70,7 +72,7 @@ class GDFN(nn.Module):
     def __init__(self, dim, ffn_expansion_factor=2.66):
         super().__init__()
         hidden_dim = int(dim * ffn_expansion_factor)
-        self.project_in = nn.Conv2d(dim, hidden_dim * 2, kernel_size=1, bias=False)
+        self.project_in = nn.Conv2d(dim, hidden_dim * 2, kernel_size=1, bias=False) # 升維
         self.dwconv = nn.Conv2d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, padding=1, groups=hidden_dim * 2, bias=False)
         self.project_out = nn.Conv2d(hidden_dim, dim, kernel_size=1, bias=False)
 
@@ -82,98 +84,127 @@ class GDFN(nn.Module):
         return self.project_out(x)
 
 # --------------------------------------------------
-# Restormer Block: MDTA + GDFN with residual & norm
+# ★ CHANGED: Restormer Block 加入 LayerScale（更穩）
 # --------------------------------------------------
 class RestormerBlock(nn.Module):
-    def __init__(self, dim, num_heads):
+    def __init__(self, dim, num_heads, layerscale_init=1e-2, ffn_expansion_factor=2.66):
         super().__init__()
         self.norm1 = LayerNorm2d(dim)
-        self.attn = MDTA(dim, num_heads)
+        self.attn  = MDTA(dim, num_heads)
         self.norm2 = LayerNorm2d(dim)
-        self.ffn = GDFN(dim)
-
+        self.ffn   = GDFN(dim, ffn_expansion_factor)   # ✅ 把 config 的值傳進來
+        self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(1, dim, 1, 1))
+        self.gamma_ffn  = nn.Parameter(layerscale_init * torch.ones(1, dim, 1, 1))
     def forward(self, x):
-        x = x + self.attn(self.norm1(x))
-        x = x + self.ffn(self.norm2(x))
+        x = x + self.gamma_attn * self.attn(self.norm1(x))
+        x = x + self.gamma_ffn  * self.ffn(self.norm2(x))
         return x
 
 # --------------------------------------------------
-# Downsample: Conv + PixelUnshuffle to reduce H, W
+# ★ CHANGED: Downsample 修正為 PixelUnshuffle → 1×1 Conv
+#   輸入 C → 輸出 2C（空間 /2）
 # --------------------------------------------------
 class Downsample(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.body = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels * 4, kernel_size=1, bias=False),
-            nn.PixelUnshuffle(2)  # spatial size /2, channels *4
+            nn.PixelUnshuffle(2),                                    # (B, C, H, W) → (B, 4C, H/2, W/2)
+            nn.Conv2d(in_channels * 4, in_channels * 2, 1, bias=False),  # 4C → 2C
+            LayerNorm2d(in_channels * 2)   # ★ 建議加上 更穩定
         )
-
     def forward(self, x):
         return self.body(x)
 
 # --------------------------------------------------
-# Upsample: PixelShuffle + Conv to recover size
+# ★ CHANGED: Upsample 對稱於 Downsample：1×1 Conv → PixelShuffle
+#   輸入 C → 輸出 C/2（空間 *2）
 # --------------------------------------------------
 class Upsample(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.body = nn.Sequential(
-            nn.PixelShuffle(2),  # spatial size *2, channels /4
-            nn.Conv2d(in_channels // 4, in_channels // 2, kernel_size=1, bias=False)
+            nn.Conv2d(in_channels, in_channels * 2, 1, bias=False),  # 先把通道數調整為 PixelShuffle 的輸入要求
+            nn.PixelShuffle(2),                                       # 空間尺寸 *2, 通道減半
+            LayerNorm2d(in_channels // 2)                             # ★ 建議加 LayerNorm
         )
-
     def forward(self, x):
         return self.body(x)
 
 # --------------------------------------------------
-# Restormer 主結構
+# ★ CHANGED: Skip 融合（cat 後用 1×1 Conv 壓回原通道）
+# --------------------------------------------------
+class SkipFusion(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.fuse = nn.Conv2d(channels * 2, channels, kernel_size=1, bias=False)
+    def forward(self, up_feat, enc_feat):
+        return self.fuse(torch.cat([up_feat, enc_feat], dim=1))
+
+# --------------------------------------------------
+# Restormer 主結構（含改良）
 # --------------------------------------------------
 class Restormer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        inp_ch = config["inp_channels"]
-        out_ch = config["out_channels"]
-        dim = config["embed_dim"]
-        num_blocks = config["num_blocks"]
-        num_heads = config["num_heads"]
+        self.inp_channels  = config["inp_channels"]
+        self.out_channels  = config["out_channels"]
+        dim                = config["embed_dim"]
+        num_blocks         = config["num_blocks"]
+        num_heads          = config["num_heads"]
+        layerscale_init    = config.get("layerscale_init", 1e-2)
+        self.with_residual = config.get("with_global_residual", True)
+        ffn_expansion_factor = config.get("ffn_expansion_factor", 2.66)
 
-        self.patch_embed = nn.Conv2d(inp_ch, dim, kernel_size=3, padding=1)
+        self.patch_embed = nn.Conv2d(self.inp_channels, dim, kernel_size=3, padding=1)
 
         # Encoder
-        self.encoder1 = nn.Sequential(*[RestormerBlock(dim, num_heads[0]) for _ in range(num_blocks[0])])
-        self.down1 = Downsample(dim)
+        self.encoder1 = nn.Sequential(*[RestormerBlock(dim, num_heads[0], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[0])])
+        self.down1    = Downsample(dim)          # dim → 2*dim
 
-        self.encoder2 = nn.Sequential(*[RestormerBlock(dim * 2, num_heads[1]) for _ in range(num_blocks[1])])
-        self.down2 = Downsample(dim * 2)
+        self.encoder2 = nn.Sequential(*[RestormerBlock(dim * 2, num_heads[1], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[1])])
+        self.down2    = Downsample(dim * 2)      # 2*dim → 4*dim
 
-        self.encoder3 = nn.Sequential(*[RestormerBlock(dim * 4, num_heads[2]) for _ in range(num_blocks[2])])
-        self.down3 = Downsample(dim * 4)
+        self.encoder3 = nn.Sequential(*[RestormerBlock(dim * 4, num_heads[2], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[2])])
+        self.down3    = Downsample(dim * 4)      # 4*dim → 8*dim
 
         # Bottleneck
-        self.bottleneck = nn.Sequential(*[RestormerBlock(dim * 8, num_heads[3]) for _ in range(num_blocks[3])])
+        self.bottleneck = nn.Sequential(*[RestormerBlock(dim * 8, num_heads[3], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[3])])
 
         # Decoder
-        self.up3 = Upsample(dim * 8)
-        self.decoder3 = nn.Sequential(*[RestormerBlock(dim * 4, num_heads[2]) for _ in range(num_blocks[2])])
+        self.up3      = Upsample(dim * 8)        # 8*dim → 4*dim
+        self.fuse3    = SkipFusion(dim * 4)      # concat(4*dim, 4*dim) → 4*dim
+        self.decoder3 = nn.Sequential(*[RestormerBlock(dim * 4, num_heads[2], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[2])])
 
-        self.up2 = Upsample(dim * 4)
-        self.decoder2 = nn.Sequential(*[RestormerBlock(dim * 2, num_heads[1]) for _ in range(num_blocks[1])])
+        self.up2      = Upsample(dim * 4)        # 4*dim → 2*dim
+        self.fuse2    = SkipFusion(dim * 2)
+        self.decoder2 = nn.Sequential(*[RestormerBlock(dim * 2, num_heads[1], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[1])])
 
-        self.up1 = Upsample(dim * 2)
-        self.decoder1 = nn.Sequential(*[RestormerBlock(dim, num_heads[0]) for _ in range(num_blocks[0])])
+        self.up1      = Upsample(dim * 2)        # 2*dim → dim
+        self.fuse1    = SkipFusion(dim)
+        self.decoder1 = nn.Sequential(*[RestormerBlock(dim, num_heads[0], layerscale_init, ffn_expansion_factor) for _ in range(num_blocks[0])])
 
-        self.output = nn.Conv2d(dim, out_ch, kernel_size=3, padding=1)
+        self.output   = nn.Conv2d(dim, self.out_channels, kernel_size=3, padding=1)
 
     def forward(self, x):
+        inp = x  # ★ 用於全域殘差
         x = self.patch_embed(x)
 
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(self.down1(enc1))
-        enc3 = self.encoder3(self.down2(enc2))
-        bottleneck = self.bottleneck(self.down3(enc3))
+        enc1 = self.encoder1(x)                 # dim
+        enc2 = self.encoder2(self.down1(enc1))  # 2*dim
+        enc3 = self.encoder3(self.down2(enc2))  # 4*dim
+        bot  = self.bottleneck(self.down3(enc3))# 8*dim
 
-        dec3 = self.decoder3(self.up3(bottleneck) + enc3)
-        dec2 = self.decoder2(self.up2(dec3) + enc2)
-        dec1 = self.decoder1(self.up1(dec2) + enc1)
+        up3  = self.up3(bot)                    # 4*dim
+        dec3 = self.decoder3(self.fuse3(up3, enc3))
 
-        return self.output(dec1)
+        up2  = self.up2(dec3)                   # 2*dim
+        dec2 = self.decoder2(self.fuse2(up2, enc2))
+
+        up1  = self.up1(dec2)                   # dim
+        dec1 = self.decoder1(self.fuse1(up1, enc1))
+
+        out  = self.output(dec1)
+        if self.with_residual and (self.inp_channels == self.out_channels):
+            # 全域殘差：預測殘差 + 輸入
+            return out + inp
+        return out
