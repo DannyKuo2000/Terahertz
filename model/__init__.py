@@ -1,6 +1,9 @@
 from .opticalSimulation import DiffractiveLayer
+from .opticalSimulation import LensLayer
+from .opticalSimulation import CameraLayer
 from .opticalSimulation import MaterialLayer
 from .opticalSimulation import ONN
+
 
 from .sensor import Sensor
 from .sensor import SensorNoise
