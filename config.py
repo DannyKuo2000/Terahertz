@@ -1,29 +1,33 @@
-
-# ========= Dataset =========
+# --------------------------------------------------
+# Real Dataset Configuration
+# --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "MNIST",       # 可選 "MNIST" / "EMNIST" / "FashionMNIST"
-    "emnist_split": "byclass",      # EMNIST 專用，其他 dataset 可忽略
+    "dataset_name": "Custom",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "emnist_split": "byclass",  # 只有 EMNIST 用
+    "root": "./data/GD_processed",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
     "num_workers": 0,
-    "valid_ratio": 0.1,
+    "valid_ratio": 0.1,   # 10% 驗證
+    "test_ratio": 0,    # 10% 測試
     "resize": (128, 128),
     "augmentation": {
-        "use_random_rotation": True,
-        "rotation_degrees": 10,
+        "use_random_rotation": False,
+        "rotation_degrees": 0,
         "use_random_affine": False,
-        "translate_ratio": (0.1, 0.1)
+        "translate_ratio": (0, 0)
     }
 }
     
-
-# ===== ONN / Optical Encoder Config =====
+# --------------------------------------------------
+# ONN / Optical Encoder Configuration
+# --------------------------------------------------
 ENCODER_CONFIG = {
     "num_layers": 3,          # ONN layer數量
     "num_size": 128,          # 每層大小，128x128
     "dx": 0.00075,            # 空間解析度 (m)
     "frequency": 0.2e12,      # THz頻率
-    "refractive_index": 1.7,  # 空氣折射率或介質折射率
-    "z": 0.1,                 # 層間距離 (m)
+    "refractive_index": 1,  # 空氣折射率或介質折射率
+    "z": 0.18,                 # 層間距離 (m)
 }
     
 
@@ -43,7 +47,7 @@ SENSOR_CONFIG = {
 }
 
 # --------------------------------------------------
-# Restormer Config
+# Restormer Configuration
 # --------------------------------------------------
 RESTORMER_CONFIG = {
     # I/O
@@ -74,10 +78,11 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_sensor": True,        # 是否啟用 sensor
     "use_sensor_noise": False,  # 是否啟用 sensor noise
+    "use_decoder": False,
 }
 
 # --------------------------------------------------
-# ========= Training =========
+# Training Configuration
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     "batch_size": 64,

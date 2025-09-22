@@ -1,12 +1,3 @@
-import torch
-from torch.utils.data import DataLoader, random_split
-from torchvision import datasets, transforms
-from config import DATASET_CONFIG
-
-"""
-Resize到128，跟學長的方法一樣
-"""
-### download dataset
 """
 FashionMNIST & MNIST:
 Classes | Training | Testing
@@ -19,10 +10,30 @@ balance    | 47      | 112800   | 18800   | Merged similar letters (e.g., 'C' an
 letters    | 26      | 88800    | 14800   | Uppercase letters only (labeled A~Z)
 """
 
-
+import os
+from PIL import Image
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Dataset
 from torchvision import datasets, transforms
+
+class CustomImageDataset(Dataset):
+    """
+    自定義資料集，讀取單一資料夾內的圖片 (001.png, 002.png ...)
+    """
+    def __init__(self, root_dir, transform=None):
+        self.root_dir = root_dir
+        self.transform = transform
+        self.image_files = sorted([f for f in os.listdir(root_dir) if f.endswith(('.png', '.jpg'))])
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.root_dir, self.image_files[idx])
+        image = Image.open(img_path).convert("L")  # 如果是灰階圖就用 "L"，彩色就 "RGB"
+        if self.transform:
+            image = self.transform(image)
+        return image, 0   # 這裡沒有 label，就給個 dummy=0
 
 def get_dataloaders(dataset_config):
     """
@@ -66,6 +77,22 @@ def get_dataloaders(dataset_config):
         split_name = dataset_config.get("emnist_split", "byclass")
         full_train_dataset = datasets.EMNIST(root='./data', split=split_name, train=True, download=True, transform=transform)
         test_dataset = datasets.EMNIST(root='./data', split=split_name, train=False, download=True, transform=transform)
+    elif dataset_name == "Custom":
+        # 自定義圖片資料集 (001.png, 002.png, ...)
+        full_dataset = CustomImageDataset(root_dir=dataset_config["root"], transform=transform)
+
+        # 切 train/valid/test
+        total_size = len(full_dataset)
+        test_size = int(total_size * dataset_config.get("test_ratio", 0.1))
+        valid_size = int(total_size * dataset_config.get("valid_ratio", 0.1))
+        train_size = total_size - valid_size - test_size
+        train_dataset, valid_dataset, test_dataset = random_split(full_dataset, [train_size, valid_size, test_size])
+
+        # DataLoader
+        train_loader = DataLoader(train_dataset, batch_size=dataset_config["batch_size"], shuffle=True, num_workers=dataset_config["num_workers"])
+        valid_loader = DataLoader(valid_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
+        test_loader = DataLoader(test_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
+        return train_loader, valid_loader, test_loader
     else:
         raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
@@ -82,7 +109,23 @@ def get_dataloaders(dataset_config):
     return train_loader, valid_loader, test_loader
 
 if __name__ == "__main__":
-    # 測試用
+    
+    # 測試 Custom dataset
+    DATASET_CONFIG = {
+        "dataset_name": "Custom",
+        "root": "./datasets/my_images",   # 放 001.png, 002.png ...
+        "batch_size": 16,
+        "num_workers": 0,
+        "valid_ratio": 0.1,
+        "test_ratio": 0.1,
+        "resize": (128, 128),
+        "augmentation": {
+            "use_random_rotation": False,
+            "rotation_degrees": 10,
+            "use_random_affine": False,
+            "translate_ratio": (0.1, 0.1)
+        }
+    }# 測試用
     DATASET_CONFIG = {
         "dataset_name": "EMNIST",
         "emnist_split": "byclass",
