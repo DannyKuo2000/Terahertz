@@ -2,13 +2,13 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "Custom",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "dataset_name": "MNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
     "emnist_split": "byclass",  # 只有 EMNIST 用
     "root": "./data/GD_processed",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
     "num_workers": 0,
     "valid_ratio": 0.1,   # 10% 驗證
-    "test_ratio": 0,    # 10% 測試
+    "test_ratio": 0.1,    # 10% 測試
     "resize": (128, 128),
     "augmentation": {
         "use_random_rotation": False,
@@ -22,12 +22,33 @@ DATASET_CONFIG = {
 # ONN / Optical Encoder Configuration
 # --------------------------------------------------
 ENCODER_CONFIG = {
-    "num_layers": 3,          # ONN layer數量
-    "num_size": 128,          # 每層大小，128x128
+    # ResizePadLayer
+    "resize_size": (128, 128),
+    "pad_size": (128*4, 128*4),
+
+    # number of ONN
+    "num_layers": 0,          # ONN layer數量
+
+    # DiffractiveLayer
     "dx": 0.00075,            # 空間解析度 (m)
+    "num_size": 128 * 4,          # 每層大小，128x128
     "frequency": 0.2e12,      # THz頻率
+    "z": 0.06,                 # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "z": 0.18,                 # 層間距離 (m)
+    "pad_factor": 1,
+    "keep_pad": False,
+    "mask_evanescent": False,
+    "reverse_z": False,
+    "multi_step": 2,
+    "eps": 1e-3,
+    "alpha_global": 0.0,
+    "beta_freq": 0.0,
+    "use_geom_atten": False,
+    
+    # CameraLayer
+    "crop_size": 128,
+    "bin_size": 1,
+    "flip": False
 }
     
 
@@ -35,6 +56,7 @@ ENCODER_CONFIG = {
 # Sensor Configuration
 # --------------------------------------------------
 SENSOR_CONFIG = {
+    # sensor
     "output_dim": 128,   # 輸出 latent 尺寸 (若有裁切)
 
     # sensor noise
@@ -78,7 +100,7 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_sensor": True,        # 是否啟用 sensor
     "use_sensor_noise": False,  # 是否啟用 sensor noise
-    "use_decoder": False,
+    "use_decoder": True,
 }
 
 # --------------------------------------------------

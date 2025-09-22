@@ -21,7 +21,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
 # ========= Training Set Up =========
-writer = SummaryWriter(log_dir="runs/autoencoder_restormer")
+writer = SummaryWriter(log_dir="runs/restormer_baseline")
 
 # === Dataset ===
 train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
@@ -41,7 +41,7 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 
 #==== Save model ====
-def save_model(model, save_dir='./checkpoints', name='autoencoder_model.pth'):
+def save_model(model, save_dir='./checkpoints', name='restormer_baseline.pth'):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 

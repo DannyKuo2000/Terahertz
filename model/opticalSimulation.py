@@ -27,6 +27,57 @@ sample: (22.1+19.9)/2+0.2 = 21.2
 len2: (36.5+34.3)/2 = 35.4 
 camera: 39.5
 """
+class ResizePadLayer(nn.Module):
+    def __init__(self, resize_size=None, pad_size=None, mode='bilinear'):
+        """
+        resize_size: tuple (H_resize, W_resize) or None，先 resize 到此大小
+        pad_size: tuple (H_pad, W_pad) or None，resize 後再 zero padding 到此大小
+        mode: resize interpolation mode ('bilinear', 'nearest', etc.)
+        """
+        super().__init__()
+        self.resize_size = resize_size
+        self.pad_size = pad_size
+        self.mode = mode
+
+    def forward(self, x):
+        """
+        x: tensor (..., H, W), can be real or complex
+        """
+        H, W = x.shape[-2], x.shape[-1]
+
+        # -------------------------
+        # Step 1: Resize
+        # -------------------------
+        if self.resize_size is not None and (H != self.resize_size[0] or W != self.resize_size[1]):
+            shape_prefix = x.shape[:-2]
+            x_flat = x.reshape(-1, H, W)
+            if torch.is_complex(x):
+                real = F.interpolate(x_flat.real.unsqueeze(1), size=self.resize_size, mode=self.mode, align_corners=False).squeeze(1)
+                imag = F.interpolate(x_flat.imag.unsqueeze(1), size=self.resize_size, mode=self.mode, align_corners=False).squeeze(1)
+                x = torch.complex(real, imag).reshape(*shape_prefix, *self.resize_size)
+            else:
+                x = F.interpolate(x_flat.unsqueeze(1), size=self.resize_size, mode=self.mode, align_corners=False).squeeze(1).reshape(*shape_prefix, *self.resize_size)
+
+        # -------------------------
+        # Step 2: Zero padding
+        # -------------------------
+        if self.pad_size is not None:
+            H_cur, W_cur = x.shape[-2:]
+            pad_h = max(self.pad_size[0] - H_cur, 0)
+            pad_w = max(self.pad_size[1] - W_cur, 0)
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+
+            if torch.is_complex(x):
+                real = F.pad(x.real, (pad_left, pad_right, pad_top, pad_bottom))
+                imag = F.pad(x.imag, (pad_left, pad_right, pad_top, pad_bottom))
+                x = torch.complex(real, imag)
+            else:
+                x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom))
+
+        return x
 
 # ====== Air Diffraction Calculation ======
 """
@@ -200,7 +251,7 @@ class DiffractiveLayer(nn.Module):
 
         # dx check
         if self.dx > self.wl / 2:
-            print(f"⚠️ Warning: dx={self.dx*1e3:.2f} mm > λ/2={self.wl*1e3:.2f} mm, 可能 aliasing")
+            print(f"⚠️ Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, 可能 aliasing")
 
     def forward(self, E):
         if isinstance(E, np.ndarray):
@@ -561,7 +612,6 @@ class CameraLayer(nn.Module):
         # 回傳 intensity 而不是 complex
         return E_crop
 
-
 # ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
     def __init__(self, num_size=128):
@@ -581,18 +631,45 @@ class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
         self.layers = nn.ModuleList()
+        
+        # ResizePadLayer
+        resize_size = config["resize_size"]
+        pad_size = config["pad_size"]
+
+
+        # DiffractiveLayer
         num_layers = config["num_layers"]
-        num_size = config["num_size"]
         dx = config["dx"]
+        num_size = config["num_size"]
+        frequency = config["frequency"]
         z = config["z"]
         n = config["refractive_index"]
-        frequency = config["frequency"]
+        pad_factor = config["pad_factor"]
+        keep_pad = config["keep_pad"]
+        mask_evanescent = config["mask_evanescent"]
+        reverse_z = config["reverse_z"]
+        eps = config["eps"]
+        alpha_global = config["alpha_global"]
+        beta_freq = config["beta_freq"]
+        use_geom_atten = config["use_geom_atten"]
+
+        # CameraLayer
+        crop_size = config["crop_size"]
+        bin_size = config["bin_size"]
+        flip = config["flip"]
+
+
+        self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
 
         for _ in range(num_layers):
-            self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z, refractive_index=n))
+            self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z, refractive_index=n,
+                                                pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent, reverse_z=reverse_z, 
+                                                multi_step=multi_step, eps=eps, alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten))
             self.layers.append(MaterialLayer(num_size=num_size))
-        # 最後一層 DiffractiveLayer 可做成單點
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=1, frequency=frequency, z=z, refractive_index=n))
+        # 最後一層 DiffractiveLayer
+        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z, refractive_index=n))
+        
+        self.layers.append(CameraLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
 
     def forward(self, x):
         for layer in self.layers:
