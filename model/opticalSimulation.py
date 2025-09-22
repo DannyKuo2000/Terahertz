@@ -230,7 +230,7 @@ class DiffractiveLayer(nn.Module):
                     keep = ((1 - self.is_evan_torch) > 0) | (atten >= self.eps)
                     H = H * keep
 
-                # 全域衰減
+                # 全域衰減（你原本的做法保留，但確保用 tensor）
                 if self.alpha_global > 0:
                     H = H * torch.exp(torch.tensor(-self.alpha_global * dz, dtype=H.dtype, device=H.device))
 
@@ -241,18 +241,26 @@ class DiffractiveLayer(nn.Module):
             # ------------------------------
             # Step B. 頻域傳播
             # ------------------------------
-            c_fft = torch.fft.fftshift(torch.fft.fft2(E))
+            c_fft = torch.fft.fftshift(torch.fft.fft2(E))  # 改用norm="ortho"幾乎沒有影響
             angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c_fft * H))
 
             E = angular_spectrum
             z_done += dz
 
-            # 幾何擴散 (1/z)
-            if self.use_geom_atten and z_done > 0:
-                E = E / z_done
+            # 幾何擴散 (controlled, avoid division-by-small)
+            if self.use_geom_atten and z_done > 0: # 盡量不要用幾何衰減或只在最後一步用(容易讓數值爆炸或不穩定)
+                # MODIFIED: use 1/sqrt(z) (less aggressive than 1/z), prevent tiny z causing huge factors
+                #           and ensure tensor dtype/device matching E, clamp maximum factor
+                eps_z = 1e-9  # floor to avoid division by zero
+                z_safe = max(z_done, eps_z)  # python float safe lower bound
+                z_tensor = torch.tensor(z_safe, dtype=E.dtype, device=E.device)
+                geom_factor = 1.0 / torch.sqrt(z_tensor)  # amplitude ~ 1/sqrt(z)
+                # limit the maximum amplification to avoid pathological case
+                geom_factor = torch.clamp(geom_factor, max=1e3)  # MODIFIED: guard against huge factor
+                E = E * geom_factor  # MODIFIED
 
             # ------------------------------
-            # Step C. 動態裁切
+            # Step C. 動態裁切 (保留 ≥99% 能量)
             # ------------------------------
             E = self._crop_and_pad(E, energy_frac=0.99)
 
@@ -473,6 +481,48 @@ class FresnelInterface(nn.Module):
             return E_out, E_ref
         else:
             return E_out
+
+class RadialAttenuationLayer(nn.Module):
+    """
+    對複數場 E 做徑向衰減，避免邊緣數值過大。
+    
+    參數:
+    ----------
+    E : np.ndarray 或 torch.Tensor, complex
+        傳播後的場
+    R0 : float, optional
+        衰減開始的參考半徑 (pixel)。若 None，預設為圖像一半寬度。
+    exponent : float
+        控制衰減曲線陡峭度，越大越陡
+    min_factor : float
+        最遠處的最小強度因子，避免完全為 0
+
+    回傳:
+    ----------
+    E_out : same type as E
+        徑向衰減後的場
+    """
+    def __init__(self, R0_ratio=0.8, exponent=2, min_factor=0):
+        super().__init__()
+        self.R0_ratio = R0_ratio
+        self.exponent = exponent # 衰減速度
+        self.min_factor = min_factor # 邊界保留的最低強度
+        
+    def forward(self, E):
+        H, W = E.shape[-2:]
+        cy, cx = H // 2, W // 2
+        y = torch.arange(H, device=E.device) - cy
+        x = torch.arange(W, device=E.device) - cx
+        X, Y = torch.meshgrid(x, y, indexing='xy')
+        R = torch.sqrt(X**2 + Y**2) # 每個pixel到中心的距離
+        R0 = self.R0_ratio * R.max()
+
+        attenuation = torch.ones_like(R)
+        mask = R >= R0
+        attenuation[mask] = torch.exp(- ((R[mask]-R0)/(max(H,W)-R0))**self.exponent)
+        attenuation = torch.clamp(attenuation, self.min_factor, 1.0)
+
+        return E * attenuation
 
 class CameraLayer(nn.Module):
     def __init__(self, crop_size=128, bin_size=1, flip=False):
