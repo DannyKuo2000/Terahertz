@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, encoder, decoder, sensor=None, sensor_noise=None, config=None):
+    def __init__(self, encoder, decoder=None, sensor=None, sensor_noise=None, config=None):
         """
         Autoencoder with optional sensor + sensor noise
         Args:
@@ -15,15 +15,18 @@ class Autoencoder(nn.Module):
         """
         super().__init__()
         self.encoder = encoder
-        self.decoder = decoder
 
         # 根據 config 決定是否啟用 sensor / sensor_noise
         if config is not None:
             self.sensor = sensor if config.get("use_sensor", True) else None
             self.sensor_noise = sensor_noise if config.get("use_sensor_noise", True) else None
+            self.decoder = decoder if config.get("use_decoder", True) else None
         else:
             self.sensor = sensor
             self.sensor_noise = sensor_noise
+            self.decoder = None
+        
+        
 
     def forward(self, x):
         # Encoding
@@ -38,5 +41,8 @@ class Autoencoder(nn.Module):
             latent = self.sensor_noise(latent)
 
         # Decoding
-        recon = self.decoder(latent)
+        if self.decoder is not None:
+            recon = self.decoder(latent)
+        else:
+            recon = latent
         return recon
