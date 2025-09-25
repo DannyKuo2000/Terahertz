@@ -2,14 +2,15 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "MNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
-    "emnist_split": "byclass",  # 只有 EMNIST 用
-    "root": "./data/GD_processed",  # Custom dataset 的資料夾 (Custom dataset專用)
+    "dataset_name": "Custom",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "emnist_split": None,  # 只有 EMNIST 用
+    "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
     "num_workers": 0,
     "valid_ratio": 0.1,   # 10% 驗證
     "test_ratio": 0.1,    # 10% 測試
-    "resize": (128, 128),
+    "resize": 128, # 把最短邊resize到128
+    "center_crop": (128, 128),
     "augmentation": {
         "use_random_rotation": False,
         "rotation_degrees": 0,
@@ -19,7 +20,7 @@ DATASET_CONFIG = {
 }
     
 # --------------------------------------------------
-# ONN / Optical Encoder Configuration
+# Optical Encoder Configuration
 # --------------------------------------------------
 ENCODER_CONFIG = {
     # ResizePadLayer
@@ -45,21 +46,14 @@ ENCODER_CONFIG = {
     "beta_freq": 0.0,
     "use_geom_atten": False,
     
-    # CameraLayer
+    # SensorLayer
+    "active_sensor": True,
     "crop_size": 128,
     "bin_size": 1,
-    "flip": False
-}
-    
+    "flip": False,
 
-# --------------------------------------------------
-# Sensor Configuration
-# --------------------------------------------------
-SENSOR_CONFIG = {
-    # sensor
-    "output_dim": 128,   # 輸出 latent 尺寸 (若有裁切)
-
-    # sensor noise
+    # SensorNoiseLayer
+    "active_sensor_noise": True,
     "blur_kernel_size": 15,
     "blur_sigma": 5,
     "gray_mean": 0.6,     # 背景灰階均值
@@ -67,7 +61,7 @@ SENSOR_CONFIG = {
     "gray_ratio": 0.55,   # 背景混合比例
     "noise_std": 10/255.  # 高斯雜訊標準差
 }
-
+    
 # --------------------------------------------------
 # Restormer Configuration
 # --------------------------------------------------
@@ -98,7 +92,7 @@ RESTORMER_CONFIG = {
 # Autoencoder Configuration
 # --------------------------------------------------
 AUTOENCODER_CONFIG = {
-    "use_sensor": True,        # 是否啟用 sensor
+    "use_sensor": False,        # 是否啟用 sensor
     "use_sensor_noise": False,  # 是否啟用 sensor noise
     "use_decoder": True,
 }

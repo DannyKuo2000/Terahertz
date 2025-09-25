@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer
+from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, CameraLayer
 
 
 # ============================================================
@@ -22,6 +22,8 @@ def load_image(path, size=400):
 # ============================================================
 # Image Moving
 # ============================================================
+import numpy as np
+
 def shift_image(img_array, shift):
     """
     對影像做水平 & 垂直位移
@@ -52,6 +54,7 @@ def shift_image(img_array, shift):
         img_array[src_y_start:src_y_end, src_x_start:src_x_end]
 
     return shifted
+
 
 # ============================================================
 # Test Pattern Generator
@@ -93,29 +96,29 @@ def main():
     wavelength = c / frequency     # ~1.497 mm
     dx = 0.03 / 400               # 模擬平面邊長大小 
     z1 = 0.142                     # 14.2 cm (Sample -> Lens) (Real, 第一部分空氣層寬度)                  
-    z2 = 0.041                      # 4.1 cm (Lens -> sensor) (Real, 第二部分空氣層寬度)
+    z2 = 0.041                      # 4.1 cm (Lens -> Camera) (Real, 第二部分空氣層寬度)
     pupil_radius = 0.02375          # 2.54 cm 半徑
     crop_size = 400 #int(size*128/512*1.5) # 特寫寬度
     f = 0.018 # 其中一種理論公式 f = 1 / (1 / z1 + 1 / z2)
-    f = 0.1
+    f = 0.029
 
     ### Sweep (展示多組參數)
-    n_scan_x = 1 # x-axis繪製的個數
-    #plot_list_x = np.linspace(0.029, 0.029, n_scan_x)
-    plot_list_x = np.linspace(0.1, 0.1, n_scan_x)
+    n_scan_x = 5 # x-axis繪製的個數
+    plot_list_x = np.linspace(-60, 60, n_scan_x)
     print(f"x-axis: {plot_list_x}")
 
-    n_scan_y = 1 # y-axis繪製的個數
-    plot_list_y = [
-        "001",
-        "051",
-        "101",
-        "151",
-        "201",
-        "251",
-        "301",
-        "351"
-    ]
+    n_scan_y = 5 # y-axis繪製的個數
+    plot_list_y = np.linspace(z1+0.05, z1+0.1, n_scan_y)
+    """plot_list_y = [
+        "002",
+        "052",
+        "102",
+        "152",
+        "202",
+        "252",
+        "302",
+        "352"
+    ]"""
     print(f"y-axis: {plot_list_y}")
 
     
@@ -139,13 +142,13 @@ def main():
     """
     ### 轉換成電場
     """
-    E_no_sample_at_sensor = np.sqrt(img_no_sample_at_sensor)   # 🔹 取平方根得到電場幅值
-    E_no_sample_at_sensor = torch.from_numpy(E_no_sample_at_sensor).to(device).type(torch.complex64)
+    E_no_sample_at_camera = np.sqrt(img_no_sample_at_camera)   # 🔹 取平方根得到電場幅值
+    E_no_sample_at_camera = torch.from_numpy(E_no_sample_at_camera).to(device).type(torch.complex64)
     """
 
     ### 回推金屬板處的原圖像
     """
-    E_no_sample_at_sample = prop_back2(E_no_sample_at_sensor)
+    E_no_sample_at_sample = prop_back2(E_no_sample_at_camera)
     E_no_sample_at_sample = lens_back(E_no_sample_at_sample)
     E_no_sample_at_sample = prop_back1_divide3(E_no_sample_at_sample)
     E_no_sample_at_sample = prop_back1_divide3(E_no_sample_at_sample)
@@ -154,46 +157,48 @@ def main():
 
     ### 建立輸入場（振幅為影像，phase = 0）
     """img_no_sample_at_sample = ((torch.abs(E_no_sample_at_sample)) ** 2).cpu().numpy()
-    img_no_sample_at_sample = ((torch.abs(E_no_sample_at_sensor)) ** 2).cpu().numpy()
+    img_no_sample_at_sample = ((torch.abs(E_no_sample_at_camera)) ** 2).cpu().numpy()
     I0 = img_no_sample_at_sample * img_array"""
 
-    ### 建立可共用的 diffractive, lens, sensor layers
+    ### 建立可共用的 diffractive, lens, camera layers
     resizepad = ResizePadLayer(resize_size=(400, 400), pad_size=(1024, 1024))
     
-    prop1 = DiffractiveLayer(dx=dx, num_size=size, frequency=frequency, z=z1, 
-                             pad_factor=2, keep_pad=True, mask_evanescent=False, multi_step=6,
-                             alpha_global=0.0, beta_freq=0.0, use_geom_atten=False).to(device)
+    
     prop2 = DiffractiveLayer(dx=dx, num_size=size*2, frequency=frequency, z=z2, 
                              pad_factor=1, keep_pad=True, mask_evanescent=False, multi_step=2,
                              alpha_global=0.0, beta_freq=0.0, use_geom_atten=False).to(device)
     
-    sensor = SensorLayer(crop_size=size, bin_size=1, flip=True).to(device)
-    sensor2 = SensorLayer(crop_size=128, bin_size=1, flip=True).to(device)
+    camera = CameraLayer(crop_size=size, bin_size=1, flip=True).to(device)
+    camera2 = CameraLayer(crop_size=128, bin_size=1, flip=True).to(device)
 
     
     
     attenuation = RadialAttenuationLayer(R0_ratio=0, exponent=2, min_factor=0)
     
+    # 讀入實拍圖像
+    print(f"Loading real image")
+    img_array = load_image("sample_data/GroundTruth-800-v1/052.png", size=400)
+    print(f"Loading ground truth image")
+    img_GT = load_image("sample_data/RealDataset-800-v1/052.png")
+    #print(f"Loading background image") 
+    #img_no_sample_at_camera = load_image("Terahertz/sample_data/Background/Background2025-08-07.png", size=size)
+        
+
 
     UI_index = 0
     results = []  # list of tuples
     for y in plot_list_y:
         ### 讀入影像 
-        # 讀入實拍圖像
-        print(f"Loading real image")
-        img_array = load_image("sample_data/GroundTruth-800-v1/"+y+".png", size=400)
-        print(f"Loading ground truth image")
-        img_GT = load_image("sample_data/RealDataset-800-v1/"+y+".png")
-        #print(f"Loading background image") 
-        #img_no_sample_at_sensor = load_image("Terahertz/sample_data/Background/Background2025-08-07.png", size=size)
-        
+        prop1 = DiffractiveLayer(dx=dx, num_size=size, frequency=frequency, z=y, 
+                             pad_factor=2, keep_pad=True, mask_evanescent=False, multi_step=6,
+                             alpha_global=0.0, beta_freq=0.0, use_geom_atten=False).to(device)
 
         ### 建立 y-axis 不可共用的 layers
         
         
         for x in plot_list_x:
             ### 建立 x-axis 不可共用的 layers
-            lens = LensLayer(focal_length=float(x), dx=dx, num_size=size*2,
+            lens = LensLayer(focal_length=float(f), dx=dx, num_size=size*2,
                      wavelength=wavelength, device=device, pupil_type="circular",
                      pupil_radius=pupil_radius, pupil_width=None, phase_model="exact",
                      mode="forward", outside="one",
@@ -202,11 +207,11 @@ def main():
             ### UI
             UI_index += 1
             print(f"===== Running {UI_index}th image =====")
-            results.append(img_array)
-            results.append(img_GT)
+            #results.append(img_array)
+            #results.append(img_GT)
             
             
-            I0 = shift_image(img_array, int(x))
+            I0 = shift_image(img_array, (0, int(x)))
             E0 = np.sqrt(I0)   # 🔹 取平方根得到電場幅值
             E0 = torch.from_numpy(E0).to(device).type(torch.complex64)
             E0 = resizepad(E0)
@@ -219,7 +224,7 @@ def main():
 
             E = lens(E)
             print(f"Size of the output of lens {E.shape}")
-            """E_len_crop = sensor2(E)
+            """E_len_crop = camera2(E)
             I_len = (torch.abs(E) ** 2)
             I_len = I_len.cpu().numpy()
             results.append(I_len)
@@ -232,8 +237,8 @@ def main():
             #print(f"E mean: {E.mean()}")
             #E = attenuation(E)
             #print(f"E mean: {E.mean()}")
-            E2 = sensor2(E)
-            E = sensor(E)
+            E2 = camera2(E)
+            E = camera(E)
             
             I2 = (torch.abs(E2) ** 2)
             I2 = I2.cpu().numpy()
@@ -247,11 +252,11 @@ def main():
     # ---------------------------
     # 繪圖
     # ---------------------------
-    ncols = max(len(plot_list_x), 6) # 橫的有幾個
+    ncols = max(len(plot_list_x), 5) # 橫的有幾個
     nrows = max(len(plot_list_y), 5) # 直的有幾個
     print(f"ncols={ncols}, nrows={nrows}")
     fig = plt.figure(figsize=(3 * ncols, 3 * nrows))  # 每欄寬與高(吋)
-    gs = fig.add_gridspec(nrows=nrows, ncols=ncols, wspace=0.02, hspace=0.02)
+    gs = fig.add_gridspec(nrows=nrows, ncols=ncols, wspace=0.03, hspace=0.03)
 
     # Input 放左邊，跨兩列 
     """ax_input = fig.add_subplot(gs[0, 0])
@@ -260,8 +265,8 @@ def main():
     ax_input.axis("off")
 
     #ax_input = fig.add_subplot(gs[0, 1])
-    #ax_input.imshow(img_no_sample_at_sensor, cmap="gray")
-    #ax_input.set_title("No sample, view at sensor")
+    #ax_input.imshow(img_no_sample_at_camera, cmap="gray")
+    #ax_input.set_title("No sample, view at camera")
     #ax_input.axis("off")
 
     #ax_input = fig.add_subplot(gs[0, 2])
@@ -282,12 +287,13 @@ def main():
     for i, (full_img) in enumerate(results):
         row_index = i // ncols
         col_index = i % ncols
+        print(row_index, col_index)
 
-        ax_full = fig.add_subplot(gs[row_index, col_index])  # +1 因為 col=0 被 input 佔掉
+        ax_full = fig.add_subplot(gs[row_index, col_index])
         ax_full.imshow(full_img, cmap="gray")
-        #ax_full.set_title(f"y={plot_list_y[row_index]:.4f}, x={plot_list_x[col_index]:.2f}")
+        #ax_full.set_title(f"y={plot_list_y[row_index]:.4f}, x={plot_list_x[col_index]:.4f}")
         ax_full.axis("off")
-        #print(row_index, col_index)
+        
 
     plt.show()
 

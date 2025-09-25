@@ -13,7 +13,6 @@ import time
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
 from model.restormer250724 import Restormer
-from model.sensor import Sensor, SensorNoise
 from dataset import get_dataloaders
 from config import DATASET_CONFIG, ENCODER_CONFIG, SENSOR_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TRAINING_CONFIG
 
@@ -29,12 +28,9 @@ train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
 # === Model ===
 encoder = ONN(ENCODER_CONFIG).to(device)
 
-sensor = Sensor(SENSOR_CONFIG).to(device)
-sensor_noise = SensorNoise(SENSOR_CONFIG)
-
 decoder = Restormer(RESTORMER_CONFIG).to(device)
 
-model = Autoencoder(encoder=encoder, decoder=decoder, sensor=sensor, sensor_noise=sensor_noise, config=AUTOENCODER_CONFIG).to(device)
+model = Autoencoder(encoder=encoder, decoder=decoder, config=AUTOENCODER_CONFIG).to(device)
 
 # === Optimizer & Loss ===
 criterion = nn.MSELoss()

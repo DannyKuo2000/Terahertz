@@ -15,6 +15,7 @@ from PIL import Image
 import torch
 from torch.utils.data import DataLoader, random_split, Dataset
 from torchvision import datasets, transforms
+from config import DATASET_CONFIG
 
 class CustomImageDataset(Dataset):
     """
@@ -46,17 +47,16 @@ def get_dataloaders(dataset_config):
         - resize: tuple
         - augmentation: dict
     """
-    dataset_name = dataset_config.get("dataset_name", "MNIST")
-    aug_cfg = dataset_config.get("augmentation", {})
+    dataset_name = dataset_config.get("dataset_name")
+    aug_cfg = dataset_config.get("augmentation")
 
     # 建立 transform list
     transform_list = [
         transforms.Resize(dataset_config["resize"]),
+        transforms.CenterCrop(dataset_config["center_crop"]),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ]
-
-    # 資料增強
     if aug_cfg.get("use_random_rotation", False):
         transform_list.append(transforms.RandomRotation(aug_cfg.get("rotation_degrees", 10)))
     if aug_cfg.get("use_random_affine", False):
@@ -108,38 +108,10 @@ def get_dataloaders(dataset_config):
 
     return train_loader, valid_loader, test_loader
 
+# 測試
+"""
 if __name__ == "__main__":
-    
-    # 測試 Custom dataset
-    DATASET_CONFIG = {
-        "dataset_name": "Custom",
-        "root": "./datasets/my_images",   # 放 001.png, 002.png ...
-        "batch_size": 16,
-        "num_workers": 0,
-        "valid_ratio": 0.1,
-        "test_ratio": 0.1,
-        "resize": (128, 128),
-        "augmentation": {
-            "use_random_rotation": False,
-            "rotation_degrees": 10,
-            "use_random_affine": False,
-            "translate_ratio": (0.1, 0.1)
-        }
-    }# 測試用
-    DATASET_CONFIG = {
-        "dataset_name": "EMNIST",
-        "emnist_split": "byclass",
-        "batch_size": 64,
-        "num_workers": 0,
-        "valid_ratio": 0.1,
-        "resize": (128, 128),
-        "augmentation": {
-            "use_random_rotation": True,
-            "rotation_degrees": 10,
-            "use_random_affine": False,
-            "translate_ratio": (0.1, 0.1)
-        }
-    }
 
     train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
     print(f"Train: {len(train_loader.dataset)}, Valid: {len(valid_loader.dataset)}, Test: {len(test_loader.dataset)}")
+"""

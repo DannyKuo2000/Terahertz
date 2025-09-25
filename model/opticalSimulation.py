@@ -575,7 +575,7 @@ class RadialAttenuationLayer(nn.Module):
 
         return E * attenuation
 
-class CameraLayer(nn.Module):
+class SensorLayer(nn.Module):
     def __init__(self, crop_size=128, bin_size=1, flip=False):
         """
         crop_size: 裁切大小 (pixels)
@@ -609,8 +609,69 @@ class CameraLayer(nn.Module):
         if self.flip:
             E_crop = torch.flip(E_crop, dims=[0, 1])
 
+        # --- Step 4: 轉換到Intensity ---
+        I_crop = torch.abs(E_crop)
+        if I_crop.dtype != torch.float32:  
+            I_crop = I_crop.to(torch.float32)
+
         # 回傳 intensity 而不是 complex
-        return E_crop
+        return I_crop
+
+
+# ====== Sensor Noise Simulation ======
+class SensorNoiseLayer(nn.Module):
+    def __init__(self, config):
+        """
+        config:
+            - blur_kernel_size
+            - blur_sigma
+            - gray_mean
+            - gray_sigma
+            - gray_ratio
+            - noise_std
+        """
+        super().__init__()
+        self.blur_kernel_size = config.get("blur_kernel_size", 15)
+        self.blur_sigma = config.get("blur_sigma", 5)
+        self.gray_mean = config.get("gray_mean", 0.6)
+        self.gray_sigma = config.get("gray_sigma", 0.02)
+        self.gray_ratio = config.get("gray_ratio", 0.55)
+        self.noise_std = config.get("noise_std", 10/255.)
+
+        # 建立 differentiable Gaussian kernel
+        self.register_buffer('gaussian_kernel', self._create_gaussian_kernel())
+
+    def forward(self, x):
+        # Gaussian blur
+        x = self._gaussian_blur(x)
+
+        # Gray background
+        gray_bg = torch.randn_like(x) * self.gray_sigma + self.gray_mean  
+        x = (1 - self.gray_ratio) * x + self.gray_ratio * gray_bg
+
+        # Add Gaussian noise
+        noise = torch.randn_like(x) * self.noise_std
+        x = torch.clamp(x + noise, 0.0, 1.0)  
+
+        return x
+
+    def _create_gaussian_kernel(self):
+        k = self.blur_kernel_size
+        sigma = self.blur_sigma
+        coords = torch.arange(k) - k // 2
+        grid = coords.repeat(k).view(k, k)
+        x = grid
+        y = grid.t()
+        kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+        kernel = kernel.view(1, 1, k, k)  
+        kernel = kernel.repeat(3, 1, 1, 1)  # RGB 每個 channel 卷積
+        return kernel
+
+    def _gaussian_blur(self, x):
+        return F.conv2d(x, self.gaussian_kernel, 
+                        padding=self.blur_kernel_size // 2, groups=3)
+
 
 # ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
@@ -648,15 +709,26 @@ class ONN(nn.Module):
         keep_pad = config["keep_pad"]
         mask_evanescent = config["mask_evanescent"]
         reverse_z = config["reverse_z"]
+        multi_step = config["multi_step"]
         eps = config["eps"]
         alpha_global = config["alpha_global"]
         beta_freq = config["beta_freq"]
         use_geom_atten = config["use_geom_atten"]
 
-        # CameraLayer
+        # SensorLayer
+        active_sensor = config["active_sensor"]
         crop_size = config["crop_size"]
         bin_size = config["bin_size"]
         flip = config["flip"]
+
+        # Sensor Noise
+        active_sensor_noise = config["active_sensor_noise"]
+        blur_kernel_size = config["blur_kernel_size"]
+        blur_sigma = config["blur_sigma"]
+        gray_mean = config["gray_mean"]
+        gray_sigma = config["gray_sigma"]
+        gray_ratio = config["gray_ratio"]
+        noise_std = config["noise_std"]
 
 
         self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
@@ -669,7 +741,11 @@ class ONN(nn.Module):
         # 最後一層 DiffractiveLayer
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z, refractive_index=n))
         
-        self.layers.append(CameraLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
+        if active_sensor == True:
+            self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
+        if active_sensor_noise == True:
+            self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, gray_mean=gray_mean,
+                                                gray_sigma=gray_sigma, gray_ratio=gray_ratio, noise_std=noise_std))
 
     def forward(self, x):
         for layer in self.layers:
