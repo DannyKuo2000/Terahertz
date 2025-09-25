@@ -620,7 +620,7 @@ class SensorLayer(nn.Module):
 
 # ====== Sensor Noise Simulation ======
 class SensorNoiseLayer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
         """
         config:
             - blur_kernel_size
@@ -631,12 +631,12 @@ class SensorNoiseLayer(nn.Module):
             - noise_std
         """
         super().__init__()
-        self.blur_kernel_size = config.get("blur_kernel_size", 15)
-        self.blur_sigma = config.get("blur_sigma", 5)
-        self.gray_mean = config.get("gray_mean", 0.6)
-        self.gray_sigma = config.get("gray_sigma", 0.02)
-        self.gray_ratio = config.get("gray_ratio", 0.55)
-        self.noise_std = config.get("noise_std", 10/255.)
+        self.blur_kernel_size = blur_kernel_size
+        self.blur_sigma = blur_sigma
+        self.gray_mean = gray_mean
+        self.gray_sigma = gray_sigma
+        self.gray_ratio = gray_ratio
+        self.noise_std = noise_std
 
         # 建立 differentiable Gaussian kernel
         self.register_buffer('gaussian_kernel', self._create_gaussian_kernel())

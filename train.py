@@ -14,7 +14,7 @@ from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
 from model.restormer250724 import Restormer
 from dataset import get_dataloaders
-from config import DATASET_CONFIG, ENCODER_CONFIG, SENSOR_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TRAINING_CONFIG
+from config import DATASET_CONFIG, ENCODER_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TRAINING_CONFIG
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
