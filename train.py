@@ -20,7 +20,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
 # ========= Training Set Up =========
-writer = SummaryWriter(log_dir="runs/restormer_baseline")
+writer = SummaryWriter(log_dir=TRAINING_CONFIG["writer_save_path"])
 
 # === Dataset ===
 train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
@@ -37,12 +37,12 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 
 #==== Save model ====
-def save_model(model, save_dir='./checkpoints', name='restormer_baseline.pth'):
+def save_model(model, save_dir=TRAINING_CONFIG["weight_save_dir"], name=TRAINING_CONFIG["weight_save_name"]):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    weight_dir = os.path.join(save_dir, f"weight_{timestamp}")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    weight_dir = os.path.join(save_dir, f"{timestamp}")
     if not os.path.exists(weight_dir):
         os.makedirs(weight_dir)
 

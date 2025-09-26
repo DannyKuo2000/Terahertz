@@ -1,18 +1,22 @@
 import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
+import torch.optim as optim
+import torch.nn as nn
+from torch.nn import functional as F
 from tqdm import tqdm
-import os
+from torch.utils.tensorboard import SummaryWriter
+import torchvision.utils as vutils
+import matplotlib as plt
 import json
-import matplotlib.pyplot as plt
 
-# ==== 自訂模組 ====
+import os
+import time
+
+# ==== 匯入自定義模組 ====
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
 from model.restormer250724 import Restormer
-from model.sensor import Sensor, SensorNoise
 from dataset import get_dataloaders
-from config import DATASET_CONFIG, ENCODER_CONFIG, SENSOR_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG
+from config import DATASET_CONFIG, ENCODER_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TESTING_CONFIG 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
@@ -23,16 +27,10 @@ _, _, test_loader = get_dataloaders(DATASET_CONFIG)
 # ==== 建立模型 ====
 def build_model():
     encoder = ONN(ENCODER_CONFIG).to(device)
-    sensor = Sensor(SENSOR_CONFIG).to(device)
-    sensor_noise = SensorNoise(SENSOR_CONFIG)
+
     decoder = Restormer(RESTORMER_CONFIG).to(device)
-    model = Autoencoder(
-        encoder=encoder,
-        decoder=decoder,
-        sensor=sensor,
-        sensor_noise=sensor_noise,
-        config=AUTOENCODER_CONFIG
-    ).to(device)
+
+    model = Autoencoder(encoder=encoder, decoder=decoder, config=AUTOENCODER_CONFIG).to(device)
     return model
 
 # ==== 載入模型權重 ====
@@ -108,8 +106,8 @@ def test_model(model, max_ssim_images=100):
     return all_imgs, all_recons, mse, psnr, ssim
 
 # ==== 視覺化 ====
-def visualize_results(all_imgs, all_recons, model_name, num_image=10):
-    os.makedirs("./results", exist_ok=True)
+def visualize_results(all_imgs, all_recons, model_name, num_image, config):
+    os.makedirs(config["results_save_dir"], exist_ok=True)
     imgs = all_imgs[:num_image]
     recons = all_recons[:num_image]
 
@@ -122,24 +120,24 @@ def visualize_results(all_imgs, all_recons, model_name, num_image=10):
     axes[0, 0].set_ylabel("Original", fontsize=12)
     axes[1, 0].set_ylabel("Reconstructed", fontsize=12)
     plt.tight_layout()
-    plt.savefig(f"./results/{model_name}_image.png")
+    plt.savefig(f"{config["results_save_dir"]}/{model_name}_image.png")
     plt.show()
     print("Visualization saved!")
 
 # ==== 主程式 ====
 if __name__ == "__main__":
-    model_path = "./checkpoints/weight_20250821-031543/autoencoder_model.pth"
-    model_name = model_path.split("/")[-2] + "_Restormer"
+    model_path = f"{TESTING_CONFIG["weight_save_dir"]}/{TESTING_CONFIG["weight_save_name"]}"
+    model_name = model_path.split("/")[-1]
 
     model = build_model()
     model = load_model(model, model_path)
 
     all_imgs, all_recons, mse, psnr, ssim = test_model(model)
-    visualize_results(all_imgs, all_recons, model_name, num_image=10)
+    visualize_results(all_imgs, all_recons, model_name, num_image=10, config=TESTING_CONFIG)
 
     # 儲存指標
-    os.makedirs("./results", exist_ok=True)
-    metrics_path = f"./results/{model_name}_metrics.json"
+    os.makedirs(TESTING_CONFIG["results_save_dir"], exist_ok=True)
+    metrics_path = f"{TESTING_CONFIG['results_save_dir']}/{model_name}{TESTING_CONFIG['results_save_name_suffix']}"
     with open(metrics_path, "w") as f:
         json.dump({"MSE": mse, "PSNR": psnr, "SSIM": ssim}, f, indent=2)
     print(f"Metrics saved at {metrics_path}")

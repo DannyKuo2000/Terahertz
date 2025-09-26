@@ -101,9 +101,30 @@ AUTOENCODER_CONFIG = {
 # Training Configuration
 # --------------------------------------------------
 TRAINING_CONFIG = {    
+    # Set up
+    "writer_save_path": "runs/restormer_baseline",
+    "weight_save_dir": './checkpoints',
+    "weight_save_name": 'restormer_baseline.pth',
+    
+    # hyperparameters
     "batch_size": 64,
     "epochs": 20,
     "learning_rate": 1e-3,
     "patience": 5,
+
+}
+
+# --------------------------------------------------
+# Testing Configuration
+# --------------------------------------------------
+TESTING_CONFIG = {    
+    # load config
+    "weight_save_dir": './checkpoints',
+    "weight_save_name": '20250821_031543_restormer_baseline.pth',
+    
+    # save config
+    "results_save_dir": './results',
+    "results_save_name_suffix": '_metrics.json'
+
 }
 
