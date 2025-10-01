@@ -1,34 +1,24 @@
 import torch
 import torch.nn as nn
-
+from config import AUTOENCODER_CONFIG 
 
 class Autoencoder(nn.Module):
-    def __init__(self, encoder, decoder=None, config=None):
-        """
-        Autoencoder with optional sensor + sensor noise
-        Args:
-            encoder: 模擬光學前端（opticalSimulation.py）
-            decoder: Restormer 解碼器
-            config: dict, 來自 config.py (AUTOENCODER_CONFIG)
-        """
+    def __init__(self, encoder=None, decoder=None, config=AUTOENCODER_CONFIG):
         super().__init__()
-        self.encoder = encoder
+        self.use_encoder = config.get("use_encoder", True)
+        self.use_decoder = config.get("use_decoder", True)
 
-        # 根據 config 決定是否啟用 sensor / sensor_noise
-        if config is not None:
-            self.decoder = decoder if config.get("use_decoder", True) else None
-        else:
-            self.decoder = None
-        
-        
+        self.encoder = encoder if self.use_encoder else None
+        self.decoder = decoder if self.use_decoder else None
+
+        # ModuleList 只是用來展示，不參與 forward
+        self.moduleList = nn.ModuleList(
+            [m for m in [self.encoder, self.decoder] if m is not None]
+        )
 
     def forward(self, x):
-        # Encoding
-        latent = self.encoder(x)
-
-        # Decoding
+        if self.encoder is not None:
+            x = self.encoder(x)
         if self.decoder is not None:
-            recon = self.decoder(latent)
-        else:
-            recon = latent
-        return recon
+            x = self.decoder(x)
+        return x

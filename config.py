@@ -2,7 +2,7 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "Custom",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "dataset_name": "EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
     "emnist_split": None,  # 只有 EMNIST 用
     "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
@@ -23,18 +23,31 @@ DATASET_CONFIG = {
 # Optical Encoder Configuration
 # --------------------------------------------------
 ENCODER_CONFIG = {
-    # ResizePadLayer
-    "resize_size": (128, 128),
-    "pad_size": (128*4, 128*4),
+    # SourceLayer: length: 0.03m, size: 160, dx: 0.0001875
+    "use_input": False,  # 是否使用自訂source
+    "input": None,  # source
+    "mode_source": "gaussian",  # 不使用自訂source的話，要使用"white" or "gaussian"
+    "size_source": (160, 160),  # 想要製作的gaussian beam大小
+    "sigma": 0.3,  # sigma of gaussian
+    "amplitude": 1.0,  # amplitude of gaussian
+    "center": (0.0, 0.0),  # center of gaussian
+    "rotation": 0.0,  # rotation of gaussian
+    "aspect_ratio": 1.0,  # 橢圓比例
+    "resize_size_source": (160, 160),  # resize size, e.g., (H, W)
+    "new_size_source": (160, 160),  # final size, e.g., (H, W)
 
-    # number of ONN
+    # ResizePadLayer
+    "resize_size": (160, 160),  # resize size of input, e.g., (H, W)
+    "pad_size": (512, 512),  # final size of input, e.g., (H, W)
+
+    # Number of MaterialLayer
     "num_layers": 0,          # ONN layer數量
 
     # DiffractiveLayer
-    "dx": 0.00075,            # 空間解析度 (m)
-    "num_size": 128 * 4,          # 每層大小，128x128
+    "dx": 0.00075/4,            # 空間解析度 (m)
+    "num_size": 512,          # 每層大小
     "frequency": 0.2e12,      # THz頻率
-    "z": 0.06,                 # 層間距離 (m)
+    "z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,
     "keep_pad": False,
@@ -46,20 +59,40 @@ ENCODER_CONFIG = {
     "beta_freq": 0.0,
     "use_geom_atten": False,
     
+    # MaterialLayer
+    "num_size_material": 128,
+    "block_size": (4, 4),
+
+    # LensLayer
+    "focal_length": 0.029,
+    "dx": 0.00075/4,
+    "num_size": 512,
+    "wavelength": 2.998e8 / 0.2004e12,
+    "pupil_type": "circular",
+    "pupil_radius": 0.02375,
+    "pupil_width": None,
+    "phase_model": "exact",
+    "mode_lens": "forward",
+    "outside": "one",
+    "frame": True,
+    "frame_inner": 0.02375,
+    "frame_outer": 0.0254,
+
+
     # SensorLayer
     "active_sensor": True,
-    "crop_size": 128,
+    "crop_size": 160,
     "bin_size": 1,
-    "flip": False,
+    "flip": True,
 
     # SensorNoiseLayer
-    "active_sensor_noise": True,
+    "active_sensor_noise": False,
     "blur_kernel_size": 15,
     "blur_sigma": 5,
     "gray_mean": 0.6,     # 背景灰階均值
     "gray_sigma": 0.02,   # 背景灰階標準差
     "gray_ratio": 0.55,   # 背景混合比例
-    "noise_std": 10/255.  # 高斯雜訊標準差
+    "noise_std": 10/255,  # 高斯雜訊標準差
 }
     
 # --------------------------------------------------
@@ -92,9 +125,8 @@ RESTORMER_CONFIG = {
 # Autoencoder Configuration
 # --------------------------------------------------
 AUTOENCODER_CONFIG = {
-    "use_sensor": False,        # 是否啟用 sensor
-    "use_sensor_noise": False,  # 是否啟用 sensor noise
-    "use_decoder": True,
+    "use_encoder": True,
+    "use_decoder": False,
 }
 
 # --------------------------------------------------
