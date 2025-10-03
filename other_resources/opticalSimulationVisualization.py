@@ -24,7 +24,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 ENCODER_CONFIG = {
     # SourceLayer: length: 0.03m, size: 160, dx: 0.0001875
-    "use_input": False,  # 是否使用自訂source
+    "use_input": "white",  # 是否使用自訂source
     "input": None,  # source
     "mode_source": "gaussian",  # 不使用自訂source的話，要使用"white" or "gaussian"
     "size_source": (160, 160),  # 想要製作的gaussian beam大小
