@@ -26,9 +26,9 @@ ENCODER_CONFIG = {
     # SourceLayer: length: 0.03m, size: 160, dx: 0.0001875
     "use_input": False,  # 是否使用自訂source
     "input": None,  # source
-    "mode_source": "white",  # 不使用自訂source的話，要使用"white" or "gaussian"
+    "mode_source": "gaussian",  # 不使用自訂source的話，要使用"white" or "gaussian"
     "size_source": (160, 160),  # 想要製作的gaussian beam大小
-    "sigma": 0.3,  # sigma of gaussian
+    "sigma": 1.0,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian
     "center": (0.0, 0.0),  # center of gaussian
     "rotation": 0.0,  # rotation of gaussian
@@ -249,7 +249,7 @@ def load_image(path):
     return img
 
 def main():
-    img_path = "data/GroundTruth-800-v1/001.png"
+    img_path = "data/GroundTruth-800-v1/003.png"
     x = load_image(img_path)
     x = np.sqrt(x)   # 🔹 取平方根得到電場幅值
     x = torch.from_numpy(x).to(device).type(torch.complex64)
