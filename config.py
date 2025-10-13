@@ -3,7 +3,7 @@
 # --------------------------------------------------
 DATASET_CONFIG = {
     "dataset_name": "EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
-    "emnist_split": None,  # 只有 EMNIST 用
+    "emnist_split": "byclass",  # 只有 EMNIST 用
     "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
     "num_workers": 0,
@@ -53,14 +53,14 @@ ENCODER_CONFIG = {
     #"z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,
-    "keep_pad": False,
+    #"keep_pad": False,
     "mask_evanescent": False,
     "reverse_z": False,
-    "multi_step": 1,
-    "eps": 1e-3,
-    "alpha_global": 0.0,
-    "beta_freq": 0.0,
-    "use_geom_atten": False,
+    #"multi_step": 1,
+    #"eps": 1e-3,
+    #"alpha_global": 0.0,
+    #"beta_freq": 0.0,
+    #"use_geom_atten": False,
     
     #====== MaterialLayer ======
     "num_size_material": 128,

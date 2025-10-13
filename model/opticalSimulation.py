@@ -826,14 +826,14 @@ class ONN(nn.Module):
         z_values        = config["z"]  # 可能是 float 或 list
         n               = config["refractive_index"]
         pad_factor      = config["pad_factor"]
-        keep_pad        = config["keep_pad"]
+        #keep_pad        = config["keep_pad"]
         mask_evanescent = config["mask_evanescent"]
         reverse_z       = config["reverse_z"]
-        multi_step      = config["multi_step"]
-        eps             = config["eps"]
-        alpha_global    = config["alpha_global"]
-        beta_freq       = config["beta_freq"]
-        use_geom_atten  = config["use_geom_atten"]
+        #multi_step      = config["multi_step"]
+        #eps             = config["eps"]
+        #alpha_global    = config["alpha_global"]
+        #beta_freq       = config["beta_freq"]
+        #use_geom_atten  = config["use_geom_atten"]
 
         # LensLayer 
         focal_length = config["focal_length"]
@@ -883,17 +883,18 @@ class ONN(nn.Module):
         for z_values_index in range(num_layers):
             self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
+                                 pad_factor=pad_factor, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+            )
+            """DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                  pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
                                  reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                 alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)
-            )
+                                 alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)"""
             self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size))
 
 
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                            alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten))
+                                            pad_factor=pad_factor, mask_evanescent=mask_evanescent,
+                                            reverse_z=reverse_z))
         """self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
                                     pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
                                     frame_inner=frame_inner, frame_outer=frame_outer))"""
@@ -904,6 +905,7 @@ class ONN(nn.Module):
             self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
                                                 gray_mean=gray_mean, gray_sigma=gray_sigma,
                                                 gray_ratio=gray_ratio, noise_std=noise_std))
+        self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)
