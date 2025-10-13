@@ -36,7 +36,7 @@ class SourceLayer(nn.Module):
         use_input: bool，是否使用 condition 當作 source
         condition: Tensor (B,C,H,W) or None，自訂 source，初始化時就固定
         mode: "white" 或 "gaussian"，當不用 condition 時選擇哪種 source
-        size: tuple (H, W)，當不用 condition 時生成圖案的大小
+        size_source: tuple (H, W)，當不用 condition 時生成圖案的大小
 
         ---- Gaussian beam 參數 ----
         beam_waist: Gaussian beam 腰斑寬度，0~1 之間 (相對於整張圖)
@@ -70,10 +70,7 @@ class SourceLayer(nn.Module):
             # -------------------
             if self.input is None:
                 raise ValueError("use_input=True 時必須在 init 傳入 condition")
-            else:
-                input = self.resize_pad(self.input)
-                x = x * input
-            return x
+            return x * self.resize_pad(self.input)
 
         else:
             # -------------------
@@ -190,7 +187,6 @@ class ResizePadLayer(nn.Module):
 | 使用 spectral method 判斷誤差 | 頻譜分析可以幫你預估保留了多少能量   |
 
 """
-"""
 class DiffractiveLayer(nn.Module):
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                  pad_factor=2, mask_evanescent=False, reverse_z=False):
@@ -205,86 +201,73 @@ class DiffractiveLayer(nn.Module):
         self.reverse_z = reverse_z  # 是否反向傳播 (-z)
 
         # ==============================================
-        # Step 1. 建立空間頻率軸
+        # Step 1. 空間頻率軸
         # ==============================================
-        fx = np.fft.fftshift(np.fft.fftfreq(self.size * self.pad_factor, d=self.dx))  
+        fx = np.fft.fftshift(np.fft.fftfreq(self.size * self.pad_factor, d=self.dx))
         fxx, fyy = np.meshgrid(fx, fx)
 
         # ==============================================
-        # Step 2. 轉成波數分量 (rad/m)
+        # Step 2. 波數分量
         # ==============================================
         kx = 2 * np.pi * fxx
         ky = 2 * np.pi * fyy
+        k = 2 * np.pi * self.n / self.wl  # 總波數
 
         # ==============================================
-        # Step 3. 總波數大小 (rad/m)
-        # ==============================================
-        k = 2 * np.pi * self.n / self.wl
-
-        # ==============================================
-        # Step 4. 計算縱向分量 k_z
+        # Step 3. 縱向分量 kz
         # ==============================================
         argument = k**2 - kx**2 - ky**2
         tmp = np.sqrt(np.abs(argument))
         kz = np.where(argument >= 0, tmp, 1j * tmp)
 
         # ==============================================
-        # Step 5. 建立傳播相因子 exp(i k_z z)
-        # 避免反向傳播時 evanescent wave 指數爆炸
+        # Step 4. 傳播相因子
         # ==============================================
         if self.reverse_z:
-            # 反向傳播，evanescent wave 一律遮掉，避免指數爆炸
             H = np.exp(-1j * kz * self.z)
-            H[argument < 0] = 0.0
+            H[argument < 0] = 0.0  # 避免 evanescent 爆炸
         else:
             H = np.exp(1j * kz * self.z)
             if self.mask_evanescent:
-                H[argument < 0] = 0.0  # 正向也可遮 evanescent
+                H[argument < 0] = 0.0
 
-        self.jkz = torch.from_numpy(H).to(device)
+        self.H = torch.from_numpy(H.astype(np.complex64)).to(device)
 
         # ==============================================
-        # 提示: dx 必須 <= λ/2，才不會 alias
+        # Step 5. aliasing 檢查
         # ==============================================
         if self.dx > self.wl / 2:
-            print(f"⚠️ Warning: dx={self.dx*1e3:.2f} mm > λ/4={self.wl*1e3:.2f} mm, 可能會有 aliasing")
+            print(f"⚠️ Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, 可能 aliasing")
 
     def forward(self, E):
-        # ==============================================
-        # Step 0. 確保輸入是 torch.Tensor
-        # ==============================================
+        # 確保 tensor
         if isinstance(E, np.ndarray):
             E = torch.from_numpy(E).to(device)
+        E = E.to(torch.complex64)
 
-        # ==============================================
-        # Step A. 做 padding (避免邊界 wrap-around, 提升頻域解析度)
-        # ==============================================
+        # Step A. Padding
         if self.pad_factor > 1:
             pad = (self.size * (self.pad_factor - 1)) // 2
-            E = torch.nn.functional.pad(E, (pad, pad, pad, pad), mode='constant', value=0)
+            if torch.is_complex(E):
+                real = torch.nn.functional.pad(E.real, (pad, pad, pad, pad))
+                imag = torch.nn.functional.pad(E.imag, (pad, pad, pad, pad))
+                E = torch.complex(real, imag)
+            else:
+                E = torch.nn.functional.pad(E, (pad, pad, pad, pad), value=0.0)
 
-        # ==============================================
-        # Step B. Fourier domain: 做 FFT + 移頻
-        # ==============================================
-        c_fft = torch.fft.fft2(E)
-        c = torch.fft.fftshift(c_fft)
+        # Step B. 傅立葉域傳播
+        F = torch.fft.fftshift(torch.fft.fft2(E))
+        propagated = torch.fft.ifft2(torch.fft.ifftshift(F * self.H))
 
-        # ==============================================
-        # Step C. 在頻域相乘
-        # ==============================================
-        angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c * self.jkz))
-
-        # ==============================================
-        # Step D. 裁回原始大小 (若有做 padding)
-        # ==============================================
+        # Step C. 還原原始大小
         if self.pad_factor > 1:
             start = pad
             end = start + self.size
-            angular_spectrum = angular_spectrum[..., start:end, start:end]
+            propagated = propagated[..., start:end, start:end]
 
-        return angular_spectrum
-"""
-class DiffractiveLayer(nn.Module):
+        return propagated
+
+'''class DiffractiveLayer(nn.Module):
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                  pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
                  alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
@@ -499,7 +482,7 @@ class DiffractiveLayer(nn.Module):
             f"pad failed: got {E_new.shape[-2:]} expected {(H_target, W_target)}"
 
         # 保持 device 與原始 E 一致
-        return E_new.to(E.device)
+        return E_new.to(E.device)'''
 
 class LensLayer(nn.Module):
     def __init__(self, focal_length, dx, num_size, wavelength,
@@ -911,9 +894,9 @@ class ONN(nn.Module):
                                             pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
                                             reverse_z=reverse_z, multi_step=multi_step, eps=eps,
                                             alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten))
-        self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
+        """self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
                                     pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-                                    frame_inner=frame_inner, frame_outer=frame_outer))
+                                    frame_inner=frame_inner, frame_outer=frame_outer))"""
         # Sensor / Noise
         if active_sensor:
             self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
