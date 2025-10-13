@@ -28,68 +28,54 @@ len2: (36.5+34.3)/2 = 35.4
 camera: 39.5
 """
 class SourceLayer(nn.Module):
-    def __init__(self, use_input=True, input=None, mode="white", size_source=(128, 128), 
-                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0), 
+    def __init__(self, use_input=True, input=None, mode="white", size_source=(128, 128),
+                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
                  rotation=0.0, aspect_ratio=1.0,
                  resize_size_source=None, new_size_source=None):
-        """
-        use_input: bool，是否使用 condition 當作 source
-        condition: Tensor (B,C,H,W) or None，自訂 source，初始化時就固定
-        mode: "white" 或 "gaussian"，當不用 condition 時選擇哪種 source
-        size_source: tuple (H, W)，當不用 condition 時生成圖案的大小
-
-        ---- Gaussian beam 參數 ----
-        beam_waist: Gaussian beam 腰斑寬度，0~1 之間 (相對於整張圖)
-        amplitude: 光強度，0~1 之間
-        center: (cx, cy)，光束中心位置，取值範圍 [-1, 1]
-        rotation: 光束橢圓的旋轉角度 (弧度)
-        aspect_ratio: 橢圓比例 (Wx / Wy)
-
-        resize_size, new_size: 傳給 ResizePadLayer 做 resize 與 pad/crop
-        """
         super().__init__()
         self.use_input = use_input
         self.input = input
         self.mode = mode
         self.size_source = size_source
 
-        # Gaussian 相關參數
+        # Gaussian beam 參數
         self.sigma = sigma
         self.amplitude = amplitude
         self.center = center
         self.rotation = rotation
         self.aspect_ratio = aspect_ratio
 
-        # resize/pad
+        # Resize/pad layer
         self.resize_pad = ResizePadLayer(resize_size_source, new_size_source)
 
     def forward(self, x):
+        device = x.device  # ✅ 確保所有 tensor 都跟 x 在同一裝置上
+
         if self.use_input:
-            # -------------------
-            # 使用 init 時固定的 condition
-            # -------------------
             if self.input is None:
                 raise ValueError("use_input=True 時必須在 init 傳入 condition")
-            return x * self.resize_pad(self.input)
+
+            # ✅ 保證 self.input 在同一 device
+            input_resized = self.resize_pad(self.input.to(device=device, dtype=x.dtype))
+            return x * input_resized
 
         else:
             # -------------------
-            # 產生自訂 source
+            # 產生自訂光源
             # -------------------
             H, W = self.size_source
-            device = self.input.device if self.input is not None else "cpu"
 
             if self.mode == "white":
-                src = torch.ones((1, 1, H, W), dtype=torch.float32, device=device)
+                src = torch.ones((1, 1, H, W), dtype=x.dtype, device=device)
 
             elif self.mode == "gaussian":
                 yy, xx = torch.meshgrid(
-                    torch.linspace(-1, 1, H, device=device),
-                    torch.linspace(-1, 1, W, device=device),
+                    torch.linspace(-1, 1, H, device=device, dtype=x.dtype),
+                    torch.linspace(-1, 1, W, device=device, dtype=x.dtype),
                     indexing="ij"
                 )
 
-                # 平移 (中心位置)
+                # 平移中心
                 xx = xx - self.center[0]
                 yy = yy - self.center[1]
 
@@ -101,18 +87,17 @@ class SourceLayer(nn.Module):
                     y_rot = sin_t * xx + cos_t * yy
                     xx, yy = x_rot, y_rot
 
-                # 橢圓比例
+                # 橢圓比例與 Gaussian 分布
                 xx = xx / self.aspect_ratio
-
-                # Gaussian 分布
                 r2 = xx**2 + yy**2
                 src = self.amplitude * torch.exp(-r2 / (2 * self.sigma**2))
-                src = src.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+                src = src.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
 
             else:
                 raise ValueError(f"Unknown source mode: {self.mode}")
 
-            return x * self.resize_pad(src)
+            src_resized = self.resize_pad(src)
+            return x * src_resized.to(device=device, dtype=x.dtype)
 
 class ResizePadLayer(nn.Module):
     def __init__(self, resize_size=None, pad_size=None, mode='bilinear'):

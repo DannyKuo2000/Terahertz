@@ -2,7 +2,7 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "dataset_name": "MNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
     "emnist_split": "byclass",  # 只有 EMNIST 用
     "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
     "batch_size": 64,
