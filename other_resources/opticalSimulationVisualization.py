@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 import sys
 import os
 # 取得這個檔案的資料夾
-#current_dir = os.path.dirname(os.path.abspath(__file__))
+# current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # 把 model 資料夾加入 sys.path
-#sys.path.append(os.path.join(current_dir, "../model"))
+# sys.path.append(os.path.join(current_dir, "../model"))
 
 # 現在可以 import opticalSimulation 了
 # 將 script 的上一層 Terahertz 加入 sys.path

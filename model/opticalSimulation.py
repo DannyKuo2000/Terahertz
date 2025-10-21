@@ -784,7 +784,8 @@ class MaterialLayer(nn.Module):
 class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
-        self.layers = nn.ModuleList()
+        self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
+        self.layer_names = []  # 存每一層的「語意名字」
         
         # SourceLayer
         use_input           = config["use_input"]
@@ -835,7 +836,6 @@ class ONN(nn.Module):
         frame_inner  = config["frame_inner"]
         frame_outer  = config["frame_outer"]
 
-
         # SensorLayer
         active_sensor   = config["active_sensor"]
         crop_size       = config["crop_size"]
@@ -858,10 +858,21 @@ class ONN(nn.Module):
         # -------------------------------
         # 建立 layers
         # -------------------------------
+        resize_pad_layer_index = 0
+        diffractive_layer_index = 0
+        material_layer_index = 0
+        
         self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
+        self.layer_names.append(f"ResizePadLayer{resize_pad_layer_index + 1}")
+        resize_pad_layer_index += 1
+
         self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
                                        center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+        self.layer_names.append(f"SourceLayer")
+
         self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
+        self.layer_names.append(f"ResizePadLayer{resize_pad_layer_index + 1}")
+        resize_pad_layer_index += 1
 
         # 每一層使用不同的 z (如果超出長度，就循環使用)
         z_values_index = 0
@@ -870,27 +881,38 @@ class ONN(nn.Module):
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                  pad_factor=pad_factor, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
             )
+            self.layer_names.append(f"DiffractiveLayer{diffractive_layer_index + 1}")
+            diffractive_layer_index += 1
             """DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                  pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
                                  reverse_z=reverse_z, multi_step=multi_step, eps=eps,
                                  alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)"""
             self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size))
-
+            self.layer_names.append(f"MaterialLayer{material_layer_index + 1}")
+            material_layer_index += 1
 
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                             pad_factor=pad_factor, mask_evanescent=mask_evanescent,
                                             reverse_z=reverse_z))
+        self.layer_names.append(f"DiffractiveLayer{diffractive_layer_index + 1}")
+        diffractive_layer_index += 1
         """self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
                                     pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
                                     frame_inner=frame_inner, frame_outer=frame_outer))"""
         # Sensor / Noise
         if active_sensor:
             self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
+            self.layer_names.append("SensorLayer")
         if active_sensor_noise:
             self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
                                                 gray_mean=gray_mean, gray_sigma=gray_sigma,
                                                 gray_ratio=gray_ratio, noise_std=noise_std))
+            self.layer_names.append("SensorNoiseLayer")
+        
         self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
+        self.layer_names.append(f"ResizePadLayer{resize_pad_layer_index + 1}")
+        resize_pad_layer_index += 1
+
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)

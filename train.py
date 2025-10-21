@@ -37,16 +37,12 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 
 #==== Save model ====
-def save_model(model, save_dir=TRAINING_CONFIG["weight_save_dir"], name=TRAINING_CONFIG["weight_save_name"]):
+def save_model(model, epoch, val_loss, save_dir=TRAINING_CONFIG["weight_save_dir"]):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    weight_dir = os.path.join(save_dir, f"{timestamp}")
-    if not os.path.exists(weight_dir):
-        os.makedirs(weight_dir)
-
-    weight_path = os.path.join(weight_dir, f"{name}")
+    weight_path = os.path.join(save_dir, f"epoch{epoch}_valLoss{val_loss}_{timestamp}")
     torch.save(model.state_dict(), weight_path)
     print(f"Model saved at {weight_path}")
 
@@ -89,7 +85,7 @@ def train_model(patience=5):
         if val_loss < best_loss:
             best_loss = val_loss
             epochs_no_improve = 0
-            save_model(model)  # 儲存最佳模型
+            save_model(model, epoch, val_loss)  # 儲存最佳模型
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:

@@ -2,7 +2,7 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "MNIST+EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    "dataset_name": "MNIST+EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
     
     "emnist_split": "byclass",  # 選擇EMNIST的dataset種類 (只有 EMNIST or MNIST+EMNIST 使用)
     "emnist_ratio": 0.25,  # 選擇加入的EMNIST比例 (只有 MNIST+EMNIST 使用)
@@ -56,7 +56,7 @@ ENCODER_CONFIG = {
     "z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "pad_factor": 1,
+    "pad_factor": 2,
     #"keep_pad": False,
     "mask_evanescent": False,
     "reverse_z": False,
@@ -142,8 +142,8 @@ AUTOENCODER_CONFIG = {
 TRAINING_CONFIG = {    
     # Set up
     "writer_save_path": "runs/baseline_restormer_ONN",
-    "weight_save_dir": './checkpoints',
-    "weight_save_name": 'baseline_restormer_ONN.pth',
+    "weight_save_dir": "./checkpoints/baseline_restormer_ONN",
+    #"weight_save_name": 'baseline_restormer_ONN.pth',
     
     # hyperparameters
     "batch_size": 64,
@@ -158,8 +158,8 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # load config
-    "weight_save_dir": './checkpoints',
-    "weight_save_name": '20250821_031543_restormer_baseline.pth',
+    "weight_save_dir": './checkpoints/20251013_222404',
+    "weight_save_name": 'baseline_restormer_ONN_padding.pth',
     
     # save config
     "results_save_dir": './results',

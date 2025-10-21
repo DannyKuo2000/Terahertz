@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import json
 import random
 import os
@@ -32,7 +32,7 @@ model = Autoencoder(encoder=encoder, decoder=decoder, config=AUTOENCODER_CONFIG)
 
 # ==== 載入模型權重 ====
 def load_model(model, model_path):
-    state_dict = torch.load(model_path, map_location=device)
+    state_dict = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()
     print(f"Model loaded from {model_path}")
@@ -123,6 +123,7 @@ def onn_debug_run(model):
     split_method = TESTING_CONFIG.get("ONN_input_select", "fix")
     seed = TESTING_CONFIG.get("seed", None)
 
+    # 選取 input
     if split_method == "fix":
         idx = 0
     else:
@@ -134,50 +135,33 @@ def onn_debug_run(model):
     img = img.unsqueeze(0).to(device)
 
     vutils.save_image(img, f"{debug_dir}/input_{split_method}.png", normalize=True)
+    print(f"[ONN DEBUG] Saved input image to {debug_dir}/input_{split_method}.png")
 
     # -------------------------------
-    # 設定 hook 擷取每層輸出：
-    # 幫 encoder 的每一層加上 hook，在 forward 時自動儲存輸出
-    # 在不改動模型的情況下，取出中間層資訊
+    # forward 每層並存 output
     # -------------------------------
-    activations = {}
+    x = img
+    for i, layer in enumerate(model.encoder.layers):
+        x = layer(x)
+        out = x
 
-    def get_hook(name):
-        def hook(_, __, output):  # _:該層module本身, __:該層輸入, 
-            # 自動處理複數
-            if torch.is_complex(output):
-                output_vis = torch.abs(output)**2  # 取振幅
-            else:
-                output_vis = output
-            activations[name] = output_vis.detach().cpu()
-        return hook
+        # 處理 complex
+        if torch.is_complex(out):
+            out = torch.abs(out)**2
 
-    hooks = []
-    for name, layer in model.encoder.named_children():
-        hooks.append(layer.register_forward_hook(get_hook(name)))
+        # 只存第一個 channel
+        out_to_save = out[:, 0:1, :, :]
 
-    # forward encoder
-    with torch.no_grad():  # 這一行會自動觸發每層的 hook → 自動蒐集每層輸出。
-        _ = model.encoder(img)
+        # 對應名字
+        layer_name = model.encoder.layer_names[i]
 
-    # 移除 hook
-    for h in hooks:  # 避免未來再 forward 時繼續觸發（防止 memory leak）。
-        h.remove()
-
-    # -------------------------------
-    # 儲存每層的 feature map
-    # -------------------------------
-    for name, feat in activations.items():
-        # 若是多通道，只取前 1 個通道顯示
-        save_path = os.path.join(debug_dir, f"{name}_output.png")
-
-        # 若數值範圍太大或太小，自動 normalize
-        feat_to_save = feat[:, 0:1, :, :]
-        vutils.save_image(feat_to_save, save_path, normalize=True)
-        print(f"[ONN DEBUG] Saved layer output: {save_path}")
+        save_path = os.path.join(debug_dir, f"{layer_name}_output.png")
+        vutils.save_image(out_to_save, save_path, normalize=True)
+        print(f"[ONN DEBUG] Saved layer '{layer_name}' output to {save_path}")
 
     print(f"[ONN DEBUG] All layer outputs saved in {debug_dir}")
 
+    
 # ==== 主程式 ====
 if __name__ == "__main__":
     model_path = f"{TESTING_CONFIG['weight_save_dir']}/{TESTING_CONFIG['weight_save_name']}"
@@ -187,13 +171,13 @@ if __name__ == "__main__":
 
     if TESTING_CONFIG.get("onn_debug", False):
         onn_debug_run(model)
-    else:
-        all_imgs, all_recons, mse, psnr, ssim = test_model(model, max_ssim_images=100)
-        visualize_results(all_imgs, all_recons, model_name, num_image=10, config=TESTING_CONFIG)
 
-        # 儲存指標
-        os.makedirs(TESTING_CONFIG["results_save_dir"], exist_ok=True)
-        metrics_path = f"{TESTING_CONFIG['results_save_dir']}/{model_name}{TESTING_CONFIG['results_save_name_suffix']}"
-        with open(metrics_path, "w") as f:
-            json.dump({"MSE": mse, "PSNR": psnr, "SSIM": ssim}, f, indent=2)
-        print(f"Metrics saved at {metrics_path}")
+    all_imgs, all_recons, mse, psnr, ssim = test_model(model, max_ssim_images=100)
+    visualize_results(all_imgs, all_recons, model_name, num_image=10, config=TESTING_CONFIG)
+
+    # 儲存指標
+    os.makedirs(TESTING_CONFIG["results_save_dir"], exist_ok=True)
+    metrics_path = f"{TESTING_CONFIG['results_save_dir']}/{model_name}{TESTING_CONFIG['results_save_name_suffix']}"
+    with open(metrics_path, "w") as f:
+        json.dump({"MSE": mse, "PSNR": psnr, "SSIM": ssim}, f, indent=2)
+    print(f"Metrics saved at {metrics_path}")
