@@ -1,3 +1,5 @@
+# 這是一段 從訓練好的光學神經網路 (D2NN / ONN) 模型中取出各層參數，並轉換成實際可製作的三維光學結構資料 (3D voxel model) 的程式。
+# 它的目的不是訓練模型，而是 根據模型的 phase pattern 產生對應的 3D 幾何結構 (.npy 檔案)，讓你之後能做模擬或實體實作。
 import os
 import csv
 import random
@@ -19,12 +21,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 import pytorch_ssim
 import math
-
-
-import D2NN_ONN_DNN_pretest_absorption_v0
+import D2NN_ONN_DNN_pretest_absorption_v0 # import your model here
 
 i = (-1)**0.5
-
 
 def find_surface_points(data):
     # Ensure the data is treated as a boolean array
@@ -49,46 +48,40 @@ def find_surface_points(data):
 
     return surface
 
-
-
 def main(args):
 
-    vol_size = 0.000025
-    #vol_size = 0.000005
-    x_size = 0.00040
-    H_thickness = 0.003
-    H_number = int(H_thickness/vol_size)
-    dx = 0.00075
-    x_number = int(dx/x_size)
-    n = 1.70
+    vol_size = 0.000025  # voxel厚度 (單位 m)
+    #vol_size = 0.000005  
+    x_size = 0.00040   # 印製最小可操控的寬度 (m)
+    H_thickness = 0.003  # 整個材料層的厚度 (m)
+    H_number = int(H_thickness/vol_size)  # 厚度最大的可調整範圍
+    dx = 0.00075  # pixel spacing
+    x_number = int(dx/x_size)  # 一單位製造寬度對應到幾個weighting參數
+    n = 1.70  # 折射率
     #n = 3.42
-    dn = n -1
-    c = 3e8
-    lam = c/0.2e12
-    k = 2*math.pi/lam
+    dn = n - 1  # 折射率差
+    c = 2.998e8  # 光速
+    lam = c / 0.2004e12  # 波長 (0.2 THz)
+    k = 2 * math.pi / lam  # 波數
 
     nn = 0
-
-    
 
     if not os.path.exists(args.model_save_path):
         os.mkdir(args.model_save_path)
 
-    model = D2NN_ONN_DNN_pretest_absorption_v0.Net()
-    model.cuda()
+    model = D2NN_ONN_DNN_pretest_absorption_v0.Net()  # load your model
+    model.cuda()  # move to cuda
+    model.load_state_dict(torch.load(args.model_save_path + str(args.start_epoch) + args.model_name))  # load your weight
 
-    model.load_state_dict(torch.load(args.model_save_path + str(args.start_epoch) + args.model_name))
-
-
-    for name,param in model.named_parameters():
+    for name, param in model.named_parameters():
 
         #print(torch.exp(i*param))
         #print("+++++++++++++++++++++++")
         
         size = param.size()
         sig = torch.nn.Sigmoid()
-        param = sig(param)
-        param = param*2*math.pi
+        param = sig(param)  # 用 Sigmoid 將參數壓到 (0, 1), why not linear transform ?????
+        param = param * 2 * math.pi  # 再乘上2π，把它視為「相位偏移」
         
         print("+++++++++++++++++++++++++")
         print(param)
@@ -100,7 +93,7 @@ def main(args):
         #param = param + math.pi
         
 
-        nn = nn +1
+        nn = nn + 1
 
 
         #param = torch.sin(param)+1
@@ -115,64 +108,58 @@ def main(args):
         #print(torch.exp(i*(param)))
 
 
-        cube = np.zeros((int(size[0]*x_number),int(size[1]*x_number),int(H_number)))
-        d_max=lam/dn
-        print("min ",torch.min(param),"max ",torch.min(param))
-        min1=0.00000
-        max1=0.00000
+        cube = np.zeros((int(size[0] * x_number), int(size[1] * x_number), int(H_number)))  # 一片ONN的長寬高
+        d_max = lam / dn  # not sure what is this?
+        print("min ", torch.min(param), "max ", torch.min(param))
+        min_h = 0.00000  # 最小限制厚度
+        max_h = 1.00000  # 最大限制厚度
 
 
         for x in range(size[0]):
             for y in range(size[1]):
 
-                h = param[x,y]/k/dn
+                h = param[x, y] / k / dn  # 相位轉成厚度, radian / (radian/length) / (折射率) = length, 好像可以不用乘2pi再除2pi
                 
                 #print("333333333333333333333333333333",param[x,y],"333333333333333333333333333333")
                 #h = param[x,y]*d_max
-                if(float(h)>max1):
-                    max1=float(h)
-                if(float(h)<min1):
-                    min1=float(h)
+
+                if (float(h) > max_h):
+                    max_h = float(h)
+                if (float(h) < min_h):
+                    min_h = float(h)
 
 
-                h = int(torch.round(h/vol_size))
+                h = int(torch.round(h / vol_size))  # quantize到整數個voxel
                 
 
                 #print(h)
 
-                plane = np.ones((x_number, x_number, h))
-                cube[0+x_number*x:0+x_number*(x+1), 0+x_number*y:0+x_number*(y+1),:h] = plane
+                plane = np.ones((x_number, x_number, h))  # 一個單位柱子的大小長相
+                cube[0 + x_number * x : 0 + x_number * (x + 1), 0 + x_number * y : 0 + x_number * (y + 1), : h] = plane  # 把需要製造的單位柱子填成1，否則是0
 
         #np.save("param_pixel_{}.npy".format(nn), cube)
         print("22222222222222222222222222222222222222222222222")
-        print("min1 ",min1,"max1 ",max1)
+        print("min_h ", min_h, "max_h ", max_h)
         print("22222222222222222222222222222222222222222222222")
-        base = np.zeros((int(size[1]*x_number)+8,int(size[1]*x_number)+8,int(H_number)))
-        base[4:int(size[1]*x_number)+4,4:int(size[1]*x_number)+4] = cube
-        base[0:4,:,0:20] = 1
-        base[int(size[1]*x_number)+4:int(size[1]*x_number)+8,:,0:20] = 1
-        base[:,0:4,0:20] = 1
-        base[:,int(size[1]*x_number)+4:int(size[1]*x_number)+8,0:20] = 1
+        base = np.zeros((int(size[1] * x_number) + 8, int(size[1] * x_number) + 8, int(H_number)))  # 創出一個最大的base
+        base[4:int(size[1] * x_number) + 4, 4:int(size[1] * x_number) + 4] = cube  # 左跟下拉出4格位置，然後把cube貼上去
+        base[0:4, :, 0:20] = 1  # 左側建出20單位高的邊
+        base[int(size[1] * x_number) + 4 : int(size[1] * x_number) + 8, :, 0:20] = 1  # 右側建出20單位高的邊
+        base[:, 0:4, 0:20] = 1  # 上側建出20單位高的邊
+        base[:, int(size[1] * x_number) + 4 : int(size[1] * x_number) + 8, 0:20] = 1  # 下側建出20單位高的邊
 
-        base_1 = np.ones((int(size[1]*x_number)+8,int(size[1]*x_number)+8,4))
+        base_1 = np.ones((int(size[1] * x_number) + 8, int(size[1] * x_number) + 8, 4))  # 再建出一個高4單位的綜合底
         #print(base_1.shape)
         #print(base.shape)
-        base = np.concatenate((base_1,base), axis = 2)
+        base = np.concatenate((base_1, base), axis = 2)  # 把綜合底接在所有東西下面
        
         
 
         #base = find_surface_points(base)
 
 
-        np.save("param_4000epoch_{}.npy".format(nn), base)
+        np.save("param_4000epoch_{}.npy".format(nn), base)  # 存成npy檔
                 
-
-
-
-
-                
-        
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

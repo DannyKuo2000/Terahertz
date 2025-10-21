@@ -2,9 +2,13 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "MNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
-    "emnist_split": "byclass",  # 只有 EMNIST 用
-    "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
+    "dataset_name": "MNIST+EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
+    
+    "emnist_split": "byclass",  # 選擇EMNIST的dataset種類 (只有 EMNIST or MNIST+EMNIST 使用)
+    "emnist_ratio": 0.25,  # 選擇加入的EMNIST比例 (只有 MNIST+EMNIST 使用)
+    "seed": 42,  # "random"或一個數字 (只有 MNIST+EMNIST 使用)
+    "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (只有 Custom dataset專用)
+    
     "batch_size": 64,
     "num_workers": 0,
     "valid_ratio": 0.1,   # 10% 驗證
@@ -159,7 +163,11 @@ TESTING_CONFIG = {
     
     # save config
     "results_save_dir": './results',
-    "results_save_name_suffix": '_metrics.json'
+    "results_save_name_suffix": '_metrics.json',
 
+    # ONN debug
+    "onn_debug": True,
+    "ONN_input_select": "fix",  # fix or random
+    "seed": None  # if randomly select, choose a seed
 }
 
