@@ -53,14 +53,14 @@ class ONN(nn.Module):
         z_values        = config["z"]  # 可能是 float 或 list
         n               = config["refractive_index"]
         pad_factor      = config["pad_factor"]
-        keep_pad        = config["keep_pad"]
+        #keep_pad        = config["keep_pad"]
         mask_evanescent = config["mask_evanescent"]
         reverse_z       = config["reverse_z"]
-        multi_step      = config["multi_step"]
-        eps             = config["eps"]
-        alpha_global    = config["alpha_global"]
-        beta_freq       = config["beta_freq"]
-        use_geom_atten  = config["use_geom_atten"]
+        #multi_step      = config["multi_step"]
+        #eps             = config["eps"]
+        #alpha_global    = config["alpha_global"]
+        #beta_freq       = config["beta_freq"]
+        #use_geom_atten  = config["use_geom_atten"]
 
         # LensLayer 
         focal_length = config["focal_length"]
@@ -110,25 +110,16 @@ class ONN(nn.Module):
         for z_values_index in range(num_layers):
             self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
-                                 reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                 alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)
+                                 pad_factor=pad_factor, mask_evanescent=mask_evanescent,
+                                 reverse_z=reverse_z)
             )
             self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size))
-
-
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                            alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten))
-        z_values_index += 1
-        self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
+        """self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
                                     pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-                                    frame_inner=frame_inner, frame_outer=frame_outer))
+                                    frame_inner=frame_inner, frame_outer=frame_outer))"""
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                            alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten))
+                                            pad_factor=pad_factor, mask_evanescent=mask_evanescent,
+                                            reverse_z=reverse_z))
         # Sensor / Noise
         if active_sensor:
             self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
