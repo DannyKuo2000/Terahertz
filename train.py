@@ -42,7 +42,7 @@ def save_model(model, epoch, val_loss, save_dir=TRAINING_CONFIG["weight_save_dir
         os.makedirs(save_dir)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    weight_path = os.path.join(save_dir, f"epoch{epoch}_valLoss{val_loss}_{timestamp}")
+    weight_path = os.path.join(save_dir, f"epoch{epoch+1}_valLoss{val_loss:.4f}_{timestamp}.pth")
     torch.save(model.state_dict(), weight_path)
     print(f"Model saved at {weight_path}")
 
@@ -89,8 +89,13 @@ def train_model(patience=5):
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
+                save_model(model, epoch, val_loss)
                 print(f"Early stopping triggered at epoch {epoch+1}")
                 break
+        
+        # === Last save ===
+        if epoch + 1 == TRAINING_CONFIG["epochs"]:
+            save_model(model, epoch, val_loss)
 
         # === Logging images to Tensorboard ===
         with torch.no_grad():
@@ -124,4 +129,3 @@ def validate_model(epoch):
 
 if __name__ == "__main__":
     train_model(patience=TRAINING_CONFIG["patience"])
-    save_model(model)
