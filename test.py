@@ -60,6 +60,33 @@ def ssim_pt(img1, img2, window_size=11, C1=0.01**2, C2=0.03**2):
     ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
     return ssim_map.mean().item()
 
+# ==== ONN Material Phase Difference Loss Calculation ====
+def local_contrast_loss(phase: torch.Tensor) -> torch.Tensor:
+    """
+    計算 phase matrix 的 Local Contrast Loss。
+    Phase 會自動 wrap 到 [-pi, pi]，並計算相鄰元素差分。
+    
+    Args:
+        phase: (B, C, H, W) tensor，float32 或 float64，相位值（可以超過 [-pi, pi]）
+        
+    Returns:
+        loss: 標量 tensor，局部對比損失
+    """
+    # 將 phase 壓回 [-pi, pi]
+    phase_wrapped = torch.atan2(torch.sin(phase), torch.cos(phase))
+
+    # 計算水平、垂直方向相鄰差分
+    dx = phase_wrapped[:, :, :, 1:] - phase_wrapped[:, :, :, :-1]
+    dy = phase_wrapped[:, :, 1:, :] - phase_wrapped[:, :, :-1, :]
+
+    # 差分後也 wrap 回 [-pi, pi]
+    dx = torch.atan2(torch.sin(dx), torch.cos(dx))
+    dy = torch.atan2(torch.sin(dy), torch.cos(dy))
+
+    # Loss: 平均相鄰差分絕對值
+    loss = (dx.abs().mean() + dy.abs().mean()) / 2.0
+    return loss
+
 # ==== 測試與指標計算 ====
 def test_model(model, max_ssim_images=100):
     model.eval()
@@ -94,6 +121,8 @@ def test_model(model, max_ssim_images=100):
 
     print(f"Test MSE: {mse:.6f}, PSNR: {psnr:.4f}, SSIM: {ssim:.4f}")
     return all_imgs, all_recons, mse, psnr, ssim
+
+
 
 # ==== Output 視覺化 ====
 def visualize_results(all_imgs, all_recons, model_name, num_image, config):

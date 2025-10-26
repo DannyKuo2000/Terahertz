@@ -752,9 +752,10 @@ class SensorNoiseLayer(nn.Module):
 
 # ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
-    def __init__(self, num_size=128, block_size=(1, 1)):
+    def __init__(self, num_size=128, block_size=(1, 1), return_phases=True):
         super().__init__()
         self.block_size = block_size
+        self.return_phases = return_phases
         h_small = math.ceil(num_size / block_size[0])
         w_small = math.ceil(num_size / block_size[1])
 
@@ -778,7 +779,11 @@ class MaterialLayer(nn.Module):
         phase_mask = torch.exp(1j * phase_full).to(x.device)
 
         # 相乘（自動 broadcast 到 B, C）
-        return x * phase_mask
+        if self.return_phases == True:
+            print(f"Max: {torch.max(self.phase)}, Min: {torch.min(self.phase)}")
+            return x * phase_mask, self.phase
+        else:
+            return x * phase_mask
 
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
@@ -854,6 +859,7 @@ class ONN(nn.Module):
         # MaterialLayer
         num_size_material   = config["num_size"]
         block_size          = config["block_size"]
+        return_phases       = config["return_phases"]
 
         # -------------------------------
         # 建立 layers
@@ -892,7 +898,7 @@ class ONN(nn.Module):
                                  pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
                                  reverse_z=reverse_z, multi_step=multi_step, eps=eps,
                                  alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)"""
-            self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size))
+            self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size, return_phases=return_phases))
             self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index + 1}")
             material_layer_index += 1
             total_index += 1
@@ -924,7 +930,26 @@ class ONN(nn.Module):
         resize_pad_layer_index += 1
         total_index += 1
 
-    def forward(self, x):
+    def forward(self, x, return_phases=True):
+        """
+        若 return_phases=True，則除了輸出結果外，也會回傳所有 MaterialLayer 的相位參數。
+        """
+        phase_list = []  # 用來收集所有 MaterialLayer 的 phase
+
         for layer in self.layers:
-            x = layer(x)
-        return x
+            # forward
+            if isinstance(layer, MaterialLayer):
+                if return_phases:
+                    # MaterialLayer 現在可以回傳 (output, phase)
+                    x, phase = layer(x)
+                    phase_list.append(phase)
+                else:
+                    x = layer(x)
+            else:
+                x = layer(x)
+
+        if return_phases:
+            return x, phase_list
+        else:
+            return x
+        

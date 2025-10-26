@@ -69,6 +69,8 @@ ENCODER_CONFIG = {
     #====== MaterialLayer ======
     "num_size_material": 128,
     "block_size": (4, 4),
+    "return_phases": True,  # return phases for manufacture loss calculation
+
 
     #====== LensLayer ======
     "focal_length": 0.029,
@@ -134,6 +136,7 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_encoder": True,
     "use_decoder": True,
+    "return_phases": True,
 }
 
 # --------------------------------------------------
@@ -151,6 +154,10 @@ TRAINING_CONFIG = {
     "learning_rate": 1e-3,
     "patience": 5,
 
+    # Phase Local Contrast loss 動態調整？？？
+    "plc_loss_weight": 0.01,  # loss weight of phase local contrast loss
+    "plc_sigma": 40,  # 標準差為幾個單位
+    "use_weight": True,
 }
 
 # --------------------------------------------------
