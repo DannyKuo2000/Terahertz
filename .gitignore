@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 
 # Data / Results / Checkpoints
+checkpoints_weights/
 checkpoints/
 results/
 runs/

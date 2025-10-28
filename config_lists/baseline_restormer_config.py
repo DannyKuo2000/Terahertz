@@ -47,16 +47,16 @@ ENCODER_CONFIG = {
     "pad_size": (512, 512),  # final size of input, e.g., (H, W)
 
     #====== Number of MaterialLayer ======
-    "num_layers": 3,          # ONN layer數量
+    "num_layers": 0,          # ONN layer數量
 
     #====== DiffractiveLayer ======
     "dx": 0.00075/4,            # 空間解析度 (m)
     "num_size": 128*4,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
-    "z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
-    #"z": [0.142, 0.041],        # 層間距離 (m)
+    #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
+    "z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "pad_factor": 2,
+    "pad_factor": 1,
     #"keep_pad": False,
     "mask_evanescent": False,
     "reverse_z": False,
@@ -140,34 +140,23 @@ AUTOENCODER_CONFIG = {
 }
 
 # --------------------------------------------------
-# Training Configuration: Training時需要
+# Training Configuration
 # --------------------------------------------------
 TRAINING_CONFIG = {    
-    # ====== Set up ======
-    "writer_save_path": "runs/test",  # runs/{run_file_name}
-    "checkpoints_weight_save_dir": "./checkpoints_weights/test",  # ./checkpoints_weights/{run_file_name}
+    ### Set up
+    "writer_save_path": "runs/baseline_restormer",
+    #"writer_save_path": "runs/20251027_test",
+    "weight_save_dir": "./checkpoints/baseline_restormer",
+    #"weight_save_dir": "./checkpoints/20251027_test",
 
-
-    # ====== Resume training ======
-    "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
-    "resume_checkpoint_path": "./checkpoints_weights/test/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
-    "checkpoints_weight_save_dir": "./checkpoints_weights/test", 
     
-    # ====== Hyperparameters ======
+    ### hyperparameters
     "batch_size": 64,
-    "epochs": 1,
+    "epochs": 30,
     "learning_rate": 1e-3,
     "patience": 5,
-    "use_scheduler": False,                     # ✅ 是否啟用 scheduler
-    "scheduler_type": "ReduceLROnPlateau",     # ✅ 可選："StepLR", "CosineAnnealingLR" 等
-    "scheduler_params": {                      # ✅ 對應不同 scheduler 的參數
-        "mode": "min",
-        "factor": 0.5,
-        "patience": 3,
-        "verbose": True,
-    },
 
-    # ====== Phase Local Contrast loss =======動態調整？？？
+    ### Phase Local Contrast loss 動態調整？？？
     "return_phases": False,  # 開關，是否加入Phase local contrast loss
     "plc_loss_weight": 1e-5,  # loss weight of phase local contrast loss
     "plc_sigma": 40,  # 標準差為幾個單位
@@ -175,21 +164,20 @@ TRAINING_CONFIG = {
 }
 
 # --------------------------------------------------
-# Testing Configuration: Testing時需要
+# Testing Configuration
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # load config
-    "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_padding/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints/20251013_222404',
     "weight_save_name": 'baseline_restormer_ONN_padding.pth',
     
     # save config
-    "results_save_dir": './results/baseline_restormer_ONN_padding',
+    "results_save_dir": './results',
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug
     "onn_debug": True, # 開關，是否顯示Encoder(包括ONN)每層的輸出
     "ONN_input_select": "fix",  # fix or random
-    "ONN_input_idx": 0,  # if fixxed select, input the image number
     "seed": None,  # if randomly select, choose a seed
 }
 

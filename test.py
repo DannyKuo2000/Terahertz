@@ -13,7 +13,7 @@ import time
 
 # ==== 匯入自定義模組 ====
 from model.autoencoder import Autoencoder
-from model.opticalSimulation import ONN
+from model.opticalSimulation import ONN, MaterialLayer
 from model.restormer250724 import Restormer
 from dataset import get_dataloaders
 from config import DATASET_CONFIG, ENCODER_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TESTING_CONFIG 
@@ -76,7 +76,7 @@ def local_contrast_loss(phase: torch.Tensor) -> torch.Tensor:
     phase_wrapped = torch.atan2(torch.sin(phase), torch.cos(phase))
 
     # 計算水平、垂直方向相鄰差分
-    dx = phase_wrapped[:, :, :, 1:] - phase_wrapped[:, :, :, :-1]
+    dx = phase_wrapped[:, :, :, 1:] - phase_wrapped[:, :, :, :-1]  # dimension似乎只有2
     dy = phase_wrapped[:, :, 1:, :] - phase_wrapped[:, :, :-1, :]
 
     # 差分後也 wrap 回 [-pi, pi]
@@ -123,7 +123,6 @@ def test_model(model, max_ssim_images=100):
     return all_imgs, all_recons, mse, psnr, ssim
 
 
-
 # ==== Output 視覺化 ====
 def visualize_results(all_imgs, all_recons, model_name, num_image, config):
     os.makedirs(config["results_save_dir"], exist_ok=True)
@@ -145,8 +144,8 @@ def visualize_results(all_imgs, all_recons, model_name, num_image, config):
     print(f"Visualization saved at {save_path}")
 
 # ==== ONN debug ====
-def onn_debug_run(model):
-    debug_dir = os.path.join(TESTING_CONFIG["results_save_dir"], "onn_debug")
+def onn_output_debug(model):
+    debug_dir = os.path.join(TESTING_CONFIG["results_save_dir"], "ONN_debug")
     os.makedirs(debug_dir, exist_ok=True)
 
     split_method = TESTING_CONFIG.get("ONN_input_select", "fix")
@@ -154,7 +153,7 @@ def onn_debug_run(model):
 
     # 選取 input
     if split_method == "fix":
-        idx = 0
+        idx = TESTING_CONFIG["ONN_input_idx"]
     else:
         if seed is not None:
             random.seed(seed)
@@ -172,21 +171,52 @@ def onn_debug_run(model):
     x = img
     for i, layer in enumerate(model.encoder.layers):
         x = layer(x)
-        out = x
-
-        # 處理 complex
-        if torch.is_complex(out):
-            out = torch.abs(out)**2
-
-        # 只存第一個 channel
-        out_to_save = out[:, 0:1, :, :]
-
-        # 對應名字
         layer_name = model.encoder.layer_names[i]
 
-        save_path = os.path.join(debug_dir, f"{layer_name}_output.png")
-        vutils.save_image(out_to_save, save_path, normalize=True)
-        print(f"[ONN DEBUG] Saved layer '{layer_name}' output to {save_path}")
+        # 處理 forward output 強度 (所有層)
+        out = x
+        if torch.is_complex(out):
+            abs_out = torch.abs(out)**2
+        else:
+            abs_out = out
+
+        # 儲存 output 強度圖
+        vutils.save_image(abs_out[:, 0:1, :, :].cpu(), 
+                          os.path.join(debug_dir, f"{layer_name}_abs.png"), normalize=True)
+        print(f"[ONN DEBUG] Saved layer '{layer_name}' E field output")
+
+        # 只針對 MaterialLayer 輸出 phase 與權重
+        if isinstance(layer, MaterialLayer):
+            # 取出該層的 phase 權重
+            phase_image = layer.phase.detach().cpu()
+
+            # 計算相鄰元素差分
+            dx = phase_image[:, 1:] - phase_image[:, :-1]
+            dy = phase_image[1:, :] - phase_image[:-1, :]
+
+            # 拼接 dx 與 dy，用於統計分析
+            diffs = torch.abs(torch.cat([dx.flatten(), dy.flatten()], dim=0))  # ONN smoothness abs
+
+            # 計算統計量
+            mean_val = diffs.mean().item()
+            median_val = diffs.median().item()
+            max_val = diffs.max().item()
+            min_val = diffs.min().item()
+            std_val = diffs.std().item()
+
+            # 輸出統計量
+            print(f"[ONN DEBUG] {layer_name} phase diff stats:")
+            print(f"  mean={mean_val:.6f}, median={median_val:.6f}, std={std_val:.6f}, max={max_val:.6f}, min={min_val:.6f}")
+            
+            # 儲存為影像（自動 normalize 到 [0,1]）
+            np_phase = phase_image.squeeze().numpy()
+            plt.imshow(np_phase, cmap='viridis')
+            plt.colorbar()
+            plt.title(f"{layer_name} Phase")
+            plt.savefig(os.path.join(debug_dir, f"{layer_name}_phase.png"))
+            plt.close()
+
+            print(f"[ONN DEBUG] Saved layer '{layer_name}' phase weight")
 
     print(f"[ONN DEBUG] All layer outputs saved in {debug_dir}")
 
@@ -199,7 +229,7 @@ if __name__ == "__main__":
     model = load_model(model, model_path)
 
     if TESTING_CONFIG.get("onn_debug", False):
-        onn_debug_run(model)
+        onn_output_debug(model)
 
     all_imgs, all_recons, mse, psnr, ssim = test_model(model, max_ssim_images=100)
     visualize_results(all_imgs, all_recons, model_name, num_image=10, config=TESTING_CONFIG)
