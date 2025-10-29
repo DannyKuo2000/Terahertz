@@ -56,7 +56,7 @@ ENCODER_CONFIG = {
     "z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "pad_factor": 2,
+    "pad_factor": 1,
     #"keep_pad": False,
     "mask_evanescent": False,
     "reverse_z": False,
@@ -89,13 +89,13 @@ ENCODER_CONFIG = {
 
 
     #====== SensorLayer ======
-    "active_sensor": True,
+    "active_sensor": True, # 開關
     "crop_size": 40,
     "bin_size": 1,
     "flip": True,
 
     #====== SensorNoiseLayer ======
-    "active_sensor_noise": False,
+    "active_sensor_noise": False, # 開關
     "blur_kernel_size": 15,
     "blur_sigma": 5,
     "gray_mean": 0.6,     # 背景灰階均值
@@ -144,18 +144,17 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Set up ======
-    "writer_save_path": "runs/test",  # runs/{run_file_name}
-    "checkpoints_weight_save_dir": "./checkpoints_weights/test",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/baseline_restormer_ONN",  # runs/{run_file_name}
+    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_ONN",  # ./checkpoints_weights/{run_file_name}
 
 
     # ====== Resume training ======
     "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
-    "resume_checkpoint_path": "./checkpoints_weights/test/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
-    "checkpoints_weight_save_dir": "./checkpoints_weights/test", 
+    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_ONN/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Hyperparameters ======
     "batch_size": 64,
-    "epochs": 1,
+    "epochs": 60,
     "learning_rate": 1e-3,
     "patience": 5,
     "use_scheduler": False,                     # ✅ 是否啟用 scheduler

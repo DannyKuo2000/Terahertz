@@ -788,7 +788,7 @@ class MaterialLayer(nn.Module):
             return x * phase_mask
 
 # ====== ONN ensemblance ======
-"""class ONN(nn.Module):
+class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
         self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
@@ -869,12 +869,12 @@ class MaterialLayer(nn.Module):
         # 建立 layers
         # -------------------------------
         total_index = 1
-        resize_pad_layer_index = 0
-        diffractive_layer_index = 0
-        material_layer_index = 0
+        resize_pad_layer_index = 1
+        diffractive_layer_index = 1
+        material_layer_index = 1
         
         self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index + 1}")
+        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1
 
@@ -884,7 +884,7 @@ class MaterialLayer(nn.Module):
         total_index += 1
 
         self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index + 1}")
+        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1
 
@@ -895,19 +895,19 @@ class MaterialLayer(nn.Module):
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                  pad_factor=pad_factor, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
             )
-            self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
+            self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
             diffractive_layer_index += 1
             total_index += 1
 
             self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size, return_phases=return_phases))
-            self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index + 1}")
+            self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index}")
             material_layer_index += 1
             total_index += 1
 
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
                                             pad_factor=pad_factor, mask_evanescent=mask_evanescent,
                                             reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
+        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
         diffractive_layer_index += 1
         total_index += 1
 
@@ -921,11 +921,11 @@ class MaterialLayer(nn.Module):
             self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
                                                 gray_mean=gray_mean, gray_sigma=gray_sigma,
                                                 gray_ratio=gray_ratio, noise_std=noise_std))
-            self.layer_names.append(f"{total_index}SensorNoiseLayer")
+            self.layer_names.append(f"{total_index}_SensorNoiseLayer")
             total_index += 1
         
         self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
-        self.layer_names.append(f"{total_index}ResizePadLayer{resize_pad_layer_index + 1}")
+        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1
 
@@ -936,24 +936,18 @@ class MaterialLayer(nn.Module):
         phase_list = []  # 用來收集所有 MaterialLayer 的 phase
 
         for layer in self.layers:
-            # forward
-            if isinstance(layer, MaterialLayer):
-                print(f"return_phases: {self.return_phases}")
-                if self.return_phases:
-                    # MaterialLayer 現在可以回傳 (output, phase)
-                    x, phase = layer(x)
-                    phase_list.append(phase)
-                else:
-                    x = layer(x)
+            if self.return_phases and isinstance(layer, MaterialLayer):
+                x, phase = layer(x)
+                phase_list.append(phase)
             else:
                 x = layer(x)
 
         if self.return_phases:
             return x, phase_list
         else:
-            return x"""
+            return x
 
-
+"""
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
@@ -1065,10 +1059,8 @@ class ONN(nn.Module):
             self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
             diffractive_layer_index += 1
             total_index += 1
-            """DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, keep_pad=keep_pad, mask_evanescent=mask_evanescent,
-                                 reverse_z=reverse_z, multi_step=multi_step, eps=eps,
-                                 alpha_global=alpha_global, beta_freq=beta_freq, use_geom_atten=use_geom_atten)"""
+
+
             self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size, return_phases=return_phases))
             self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index + 1}")
             material_layer_index += 1
@@ -1119,17 +1111,13 @@ class ONN(nn.Module):
 
         for layer in self.layers:
             # forward
-            if isinstance(layer, MaterialLayer):
-                if self.return_phases:
-                    # MaterialLayer 現在可以回傳 (output, phase)
-                    x, phase = layer(x)
-                    phase_list.append(phase)
-                else:
-                    x = layer(x)
+            if self.return_phases and isinstance(layer, MaterialLayer):
+                x, phase = layer(x)
+                phase_list.append(phase)
             else:
                 x = layer(x)
 
         if self.return_phases:
             return x, phase_list
         else:
-            return x
+            return x"""

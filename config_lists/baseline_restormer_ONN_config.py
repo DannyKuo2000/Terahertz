@@ -2,9 +2,13 @@
 # Real Dataset Configuration
 # --------------------------------------------------
 DATASET_CONFIG = {
-    "dataset_name": "MNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom"
-    "emnist_split": "byclass",  # 只有 EMNIST 用
-    "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (Custom dataset專用)
+    "dataset_name": "MNIST+EMNIST",   # 可選: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
+    
+    "emnist_split": "byclass",  # 選擇EMNIST的dataset種類 (只有 EMNIST or MNIST+EMNIST 使用)
+    "emnist_ratio": 0.25,  # 選擇加入的EMNIST比例 (只有 MNIST+EMNIST 使用)
+    "seed": 42,  # "random"或一個數字 (只有 MNIST+EMNIST 使用)，預設用42
+    "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (只有 Custom dataset專用)
+    
     "batch_size": 64,
     "num_workers": 0,
     "valid_ratio": 0.1,   # 10% 驗證
@@ -65,6 +69,8 @@ ENCODER_CONFIG = {
     #====== MaterialLayer ======
     "num_size_material": 128,
     "block_size": (4, 4),
+    "return_phases": False,  # 開關: return phases for manufacture loss calculation
+
 
     #====== LensLayer ======
     "focal_length": 0.029,
@@ -83,13 +89,13 @@ ENCODER_CONFIG = {
 
 
     #====== SensorLayer ======
-    "active_sensor": True,
+    "active_sensor": True, # 開關
     "crop_size": 40,
     "bin_size": 1,
     "flip": True,
 
     #====== SensorNoiseLayer ======
-    "active_sensor_noise": False,
+    "active_sensor_noise": False, # 開關
     "blur_kernel_size": 15,
     "blur_sigma": 5,
     "gray_mean": 0.6,     # 背景灰階均值
@@ -128,38 +134,62 @@ RESTORMER_CONFIG = {
 # Autoencoder Configuration
 # --------------------------------------------------
 AUTOENCODER_CONFIG = {
-    "use_encoder": True,
-    "use_decoder": True,
+    "use_encoder": True, # 開關
+    "use_decoder": True, # 開關
+    "return_phases": False, # 開關，是否加入Phase local contrast loss
 }
 
 # --------------------------------------------------
-# Training Configuration
+# Training Configuration: Training時需要
 # --------------------------------------------------
 TRAINING_CONFIG = {    
-    # Set up
-    "writer_save_path": "runs/baseline_restormer_ONN",
-    "weight_save_dir": './checkpoints',
-    "weight_save_name": 'baseline_restormer_ONN.pth',
+    # ====== Set up ======
+    "writer_save_path": "runs/baseline_restormer_ONN",  # runs/{run_file_name}
+    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_ONN",  # ./checkpoints_weights/{run_file_name}
+
+
+    # ====== Resume training ======
+    "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
+    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_ONN/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
-    # hyperparameters
+    # ====== Hyperparameters ======
     "batch_size": 64,
-    "epochs": 20,
+    "epochs": 60,
     "learning_rate": 1e-3,
     "patience": 5,
+    "use_scheduler": False,                     # ✅ 是否啟用 scheduler
+    "scheduler_type": "ReduceLROnPlateau",     # ✅ 可選："StepLR", "CosineAnnealingLR" 等
+    "scheduler_params": {                      # ✅ 對應不同 scheduler 的參數
+        "mode": "min",
+        "factor": 0.5,
+        "patience": 3,
+        "verbose": True,
+    },
 
+    # ====== Phase Local Contrast loss =======動態調整？？？
+    "return_phases": False,  # 開關，是否加入Phase local contrast loss
+    "plc_loss_weight": 1e-5,  # loss weight of phase local contrast loss
+    "plc_sigma": 40,  # 標準差為幾個單位
+    "use_weight": True,
 }
 
 # --------------------------------------------------
-# Testing Configuration
+# Testing Configuration: Testing時需要
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # load config
-    "weight_save_dir": './checkpoints',
-    "weight_save_name": '20250821_031543_restormer_baseline.pth',
+    "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_padding/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'baseline_restormer_ONN_padding.pth',
     
     # save config
-    "results_save_dir": './results',
-    "results_save_name_suffix": '_metrics.json'
+    "results_save_dir": './results/baseline_restormer_ONN_padding',
+    "results_save_name_suffix": '_metrics.json',
 
+    # ONN debug
+    "onn_debug": True, # 開關，是否顯示Encoder(包括ONN)每層的輸出
+    "ONN_input_select": "fix",  # fix or random
+    "ONN_input_idx": 0,  # if fixxed select, input the image number
+    "seed": None,  # if randomly select, choose a seed
 }
+
 
