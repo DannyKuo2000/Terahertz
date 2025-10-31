@@ -224,7 +224,7 @@ def train_model(patience=5, scheduler=None):
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
-                save_model(model, epoch, val_loss, save_extra=False)
+                save_model(model, epoch, val_loss, save_extra=True)
                 print(f"Early stopping triggered at epoch {epoch+1}")
                 break
         

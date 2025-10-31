@@ -52,7 +52,7 @@ def main(args):
 
     vol_size = 0.000025  # voxel厚度 (單位 m)
     #vol_size = 0.000005  
-    x_size = 0.00040   # 印製最小可操控的寬度 (m)
+    x_size = 0.00040   # 印製時最小可操控的寬度 (m)
     H_thickness = 0.003  # 整個材料層的厚度 (m)
     H_number = int(H_thickness/vol_size)  # 厚度最大的可調整範圍
     dx = 0.00075  # pixel spacing
@@ -69,7 +69,7 @@ def main(args):
     if not os.path.exists(args.model_save_path):
         os.mkdir(args.model_save_path)
 
-    model = D2NN_ONN_DNN_pretest_absorption_v0.Net()  # load your model
+    model = D2NN_ONN_DNN_pretest_absorption_v0.Net()  # load your model here
     model.cuda()  # move to cuda
     model.load_state_dict(torch.load(args.model_save_path + str(args.start_epoch) + args.model_name))  # load your weight
 

@@ -788,7 +788,7 @@ class MaterialLayer(nn.Module):
             return x * phase_mask
 
 # ====== ONN ensemblance ======
-class ONN(nn.Module):
+"""class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
         self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
@@ -945,9 +945,9 @@ class ONN(nn.Module):
         if self.return_phases:
             return x, phase_list
         else:
-            return x
+            return x"""
 
-"""
+
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
@@ -1120,4 +1120,4 @@ class ONN(nn.Module):
         if self.return_phases:
             return x, phase_list
         else:
-            return x"""
+            return x
