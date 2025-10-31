@@ -235,7 +235,10 @@ def train_model(patience=5, scheduler=None):
         # === Logging images to Tensorboard ===
         with torch.no_grad():
             sample_imgs = imgs[:8]
-            recon_imgs = model(sample_imgs)
+            if TRAINING_CONFIG["return_phases"]:
+                recon_imgs, _ = model(sample_imgs)
+            else:
+                recon_imgs = model(sample_imgs)
 
             img_grid = vutils.make_grid(sample_imgs.cpu(), normalize=True, scale_each=True)
             recon_grid = vutils.make_grid(recon_imgs.cpu(), normalize=True, scale_each=True)
