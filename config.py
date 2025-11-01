@@ -168,7 +168,7 @@ TRAINING_CONFIG = {
 
     # ====== Phase Local Contrast loss =======動態調整？？？
     "return_phases": True,  # 開關，是否加入Phase local contrast loss
-    "plc_loss_weight": 1e-6,  # loss weight of phase local contrast loss
+    "plc_loss_weight": 1e-5,  # loss weight of phase local contrast loss
     "plc_sigma": 40,  # 標準差為幾個單位
     "use_weight": True,
 }
