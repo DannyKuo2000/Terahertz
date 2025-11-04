@@ -174,7 +174,7 @@ class ResizePadLayer(nn.Module):
 """
 class DiffractiveLayer(nn.Module):
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
-                 pad_factor=2, mask_evanescent=False, reverse_z=False):
+                 pad_factor=1, window=None, mask_evanescent=False, reverse_z=False):
         super().__init__()
         self.dx = dx  # resolution (m)
         self.size = num_size  # number of optical neurons in one dimension
@@ -182,6 +182,7 @@ class DiffractiveLayer(nn.Module):
         self.z = z  # distance between two layers (m)
         self.n = refractive_index
         self.pad_factor = pad_factor  # zero-padding 倍數
+        self.window = window
         self.mask_evanescent = mask_evanescent  # 是否遮掉 evanescent
         self.reverse_z = reverse_z  # 是否反向傳播 (-z)
 
@@ -246,13 +247,17 @@ class DiffractiveLayer(nn.Module):
 
         # Step C. 還原原始大小
         if self.pad_factor > 1:
+            if self.window == "hann":
+                window = torch.hann_window(propagated.shape[-1], device=propagated.device)
+                window2d = window[:, None] * window[None, :]
+                propagated = propagated * window2d
             start = pad
             end = start + self.size
             propagated = propagated[..., start:end, start:end]
 
         return propagated
 
-'''class DiffractiveLayer(nn.Module):
+'''class DiffractiveLayer(nn.Module): 之前有加入其他功能的版本，需要額外修改
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                  pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
                  alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
@@ -788,7 +793,7 @@ class MaterialLayer(nn.Module):
             return x * phase_mask
 
 # ====== ONN ensemblance ======
-"""class ONN(nn.Module):
+class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
         self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
@@ -819,6 +824,7 @@ class MaterialLayer(nn.Module):
         z_values        = config["z"]  # 可能是 float 或 list
         n               = config["refractive_index"]
         pad_factor      = config["pad_factor"]
+        window          = config["window"]
         #keep_pad        = config["keep_pad"]
         mask_evanescent = config["mask_evanescent"]
         reverse_z       = config["reverse_z"]
@@ -893,7 +899,7 @@ class MaterialLayer(nn.Module):
         for z_values_index in range(num_layers):
             self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
             )
             self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
             diffractive_layer_index += 1
@@ -905,13 +911,23 @@ class MaterialLayer(nn.Module):
             total_index += 1
 
         self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z))
+                                            pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
         self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
         diffractive_layer_index += 1
         total_index += 1
 
+        # self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
+        #                             pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
+        #                             frame_inner=frame_inner, frame_outer=frame_outer))
+        # self.layer_names.append(f"{total_index}_LensLayer")
+        # total_index += 1
         
+        # self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
+        #                                     pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
+        # self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
+        # diffractive_layer_index += 1
+        # total_index += 1
+
         # Sensor / Noise
         if active_sensor:
             self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
@@ -936,181 +952,6 @@ class MaterialLayer(nn.Module):
         phase_list = []  # 用來收集所有 MaterialLayer 的 phase
 
         for layer in self.layers:
-            if self.return_phases and isinstance(layer, MaterialLayer):
-                x, phase = layer(x)
-                phase_list.append(phase)
-            else:
-                x = layer(x)
-
-        if self.return_phases:
-            return x, phase_list
-        else:
-            return x"""
-
-
-# ====== ONN ensemblance ======
-class ONN(nn.Module):
-    def __init__(self, config=ENCODER_CONFIG):
-        super().__init__()
-        self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
-        self.layer_names = []  # 存每一層的「語意名字」
-        
-        # SourceLayer
-        use_input           = config["use_input"]
-        input               = config["input"]
-        mode_source         = config["mode_source"]
-        size_source         = config["size_source"]
-        sigma               = config["sigma"]
-        amplitude           = config["amplitude"]
-        center              = config["center"]
-        rotaion             = config["rotation"]
-        aspect_ratio        = config["aspect_ratio"]
-        resize_size_source  = config["resize_size_source"]
-        new_size_source     = config["new_size_source"]
-
-        # ResizePadLayer
-        resize_size = config["resize_size"]
-        pad_size    = config["pad_size"]
-
-        # DiffractiveLayer 
-        num_layers      = config["num_layers"]
-        dx              = config["dx"]
-        num_size        = config["num_size"]
-        frequency       = config["frequency"]
-        z_values        = config["z"]  # 可能是 float 或 list
-        n               = config["refractive_index"]
-        pad_factor      = config["pad_factor"]
-        #keep_pad        = config["keep_pad"]
-        mask_evanescent = config["mask_evanescent"]
-        reverse_z       = config["reverse_z"]
-        #multi_step      = config["multi_step"]
-        #eps             = config["eps"]
-        #alpha_global    = config["alpha_global"]
-        #beta_freq       = config["beta_freq"]
-        #use_geom_atten  = config["use_geom_atten"]
-
-        # LensLayer 
-        focal_length = config["focal_length"]
-        dx           = config["dx"]
-        num_size     = config["num_size"]
-        wavelength   = config["wavelength"]
-        pupil_type   = config["pupil_type"]
-        pupil_radius = config["pupil_radius"]
-        pupil_width  = config["pupil_width"]
-        phase_model  = config["phase_model"]
-        mode_lens    = config["mode_lens"]
-        outside      = config["outside"]
-        frame        = config["frame"]
-        frame_inner  = config["frame_inner"]
-        frame_outer  = config["frame_outer"]
-
-        # SensorLayer
-        active_sensor   = config["active_sensor"]
-        crop_size       = config["crop_size"]
-        bin_size        = config["bin_size"]
-        flip            = config["flip"]
-
-        # SensorNoiseLayer
-        active_sensor_noise = config["active_sensor_noise"]
-        blur_kernel_size    = config["blur_kernel_size"]
-        blur_sigma          = config["blur_sigma"]
-        gray_mean           = config["gray_mean"]
-        gray_sigma          = config["gray_sigma"]
-        gray_ratio          = config["gray_ratio"]
-        noise_std           = config["noise_std"]
-
-        # MaterialLayer
-        num_size_material   = config["num_size"]
-        block_size          = config["block_size"]
-        return_phases       = config["return_phases"]
-        self.return_phases       = config["return_phases"]
-        
-
-        # -------------------------------
-        # 建立 layers
-        # -------------------------------
-        total_index = 1
-        resize_pad_layer_index = 0
-        diffractive_layer_index = 0
-        material_layer_index = 0
-        
-        self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index + 1}")
-        resize_pad_layer_index += 1
-        total_index += 1
-
-        self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                                       center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
-        self.layer_names.append(f"{total_index}_SourceLayer")
-        total_index += 1
-
-        self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index + 1}")
-        resize_pad_layer_index += 1
-        total_index += 1
-
-        # 每一層使用不同的 z (如果超出長度，就循環使用)
-        z_values_index = 0
-        for z_values_index in range(num_layers):
-            self.layers.append(
-                DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
-            )
-            self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
-            diffractive_layer_index += 1
-            total_index += 1
-
-
-            self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size, return_phases=return_phases))
-            self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index + 1}")
-            material_layer_index += 1
-            total_index += 1
-
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
-        diffractive_layer_index += 1
-        total_index += 1
-        
-        self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
-                                    pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-                                    frame_inner=frame_inner, frame_outer=frame_outer))
-        self.layer_names.append(f"{total_index}_LensLayer")
-        total_index += 1
-
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, mask_evanescent=mask_evanescent,
-                                            reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index + 1}")
-        diffractive_layer_index += 1
-        total_index += 1
-        
-        # Sensor / Noise
-        if active_sensor:
-            self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
-            self.layer_names.append(f"{total_index}_SensorLayer")
-            total_index += 1
-        if active_sensor_noise:
-            self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
-                                                gray_mean=gray_mean, gray_sigma=gray_sigma,
-                                                gray_ratio=gray_ratio, noise_std=noise_std))
-            self.layer_names.append(f"{total_index}_SensorNoiseLayer")
-            total_index += 1
-        
-        self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index + 1}")
-        resize_pad_layer_index += 1
-        total_index += 1
-
-    def forward(self, x):
-        # ======
-        # 若 return_phases=True，則除了輸出結果外，也會回傳所有 MaterialLayer 的相位參數。
-        # ======
-        phase_list = []  # 用來收集所有 MaterialLayer 的 phase
-
-        for layer in self.layers:
-            # forward
             if self.return_phases and isinstance(layer, MaterialLayer):
                 x, phase = layer(x)
                 phase_list.append(phase)

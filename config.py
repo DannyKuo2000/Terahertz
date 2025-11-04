@@ -56,7 +56,8 @@ ENCODER_CONFIG = {
     "z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "pad_factor": 1,
+    "pad_factor": 2,
+    "window": "hann",
     #"keep_pad": False,
     "mask_evanescent": False,
     "reverse_z": False,
@@ -69,7 +70,7 @@ ENCODER_CONFIG = {
     #====== MaterialLayer ======
     "num_size_material": 128,
     "block_size": (4, 4),
-    "return_phases": True,  # 開關: return phases for manufacture loss calculation
+    "return_phases": False,  # 開關: return phases for manufacture loss calculation
 
 
     #====== LensLayer ======
@@ -136,7 +137,7 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_encoder": True, # 開關
     "use_decoder": True, # 開關
-    "return_phases": True, # 開關，是否加入Phase local contrast loss
+    "return_phases": False, # 開關，是否加入Phase local contrast loss
 }
 
 # --------------------------------------------------
@@ -144,13 +145,13 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Set up ======
-    "writer_save_path": "runs/baseline_restormer_ONN_PLC",  # runs/{run_file_name}
-    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_ONN_PLC",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/baseline_restormer_ONN_pad2",  # runs/{run_file_name}
+    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_ONN_pad2",  # ./checkpoints_weights/{run_file_name}
 
 
     # ====== Resume training ======
     "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
-    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_ONN_PLC/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_ONN_pad2/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Hyperparameters ======
     "batch_size": 64,
@@ -167,8 +168,8 @@ TRAINING_CONFIG = {
     },
 
     # ====== Phase Local Contrast loss =======動態調整？？？
-    "return_phases": True,  # 開關，是否加入Phase local contrast loss
-    "plc_loss_weight": 1e-5,  # loss weight of phase local contrast loss
+    "return_phases": False,  # 開關，是否加入Phase local contrast loss
+    "plc_loss_weight": 1e-5,  # loss weight of phase local contrast loss, 1e-5沒有效果
     "plc_sigma": 40,  # 標準差為幾個單位
     "use_weight": True,
 }
@@ -178,11 +179,17 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # load config
-    "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'baseline_restormer_ONN_PLC.pth',
-    
+    "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_pad2/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'epoch54_valLoss0.0027_20251104_121210.pth',
+    # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
+    # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch60_valLoss0.0021_20251030_224229.pth',
+
+
     # save config
-    "results_save_dir": './results/baseline_restormer',
+    "results_save_dir": './results/baseline_restormer_ONN_pad2',
+    # "results_save_dir": './results/baseline_restormer_ONN_pad2',
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug

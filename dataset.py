@@ -164,9 +164,6 @@ def get_dataloaders(dataset_config):
     return train_loader, valid_loader, test_loader
 
 # 測試
-"""
 if __name__ == "__main__":
-
     train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
     print(f"Train: {len(train_loader.dataset)}, Valid: {len(valid_loader.dataset)}, Test: {len(test_loader.dataset)}")
-"""
