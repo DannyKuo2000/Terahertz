@@ -47,16 +47,16 @@ ENCODER_CONFIG = {
     "pad_size": (512, 512),  # final size of input, e.g., (H, W)
 
     #====== Number of MaterialLayer ======
-    "num_layers": 3,          # ONN layer數量
+    "num_layers": 0,          # ONN layer數量
 
     #====== DiffractiveLayer ======
     "dx": 0.00075/4,            # 空間解析度 (m)
     "num_size": 128*4,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
-    "z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
-    #"z": [0.142, 0.041],        # 層間距離 (m)
+    #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
+    "z": [0.142, 0.041],        # 層間距離 (m)
     "refractive_index": 1,  # 空氣折射率或介質折射率
-    "pad_factor": 2,
+    "pad_factor": 1,
     "window": "hann",
     #"keep_pad": False,
     "mask_evanescent": False,
@@ -145,13 +145,13 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Set up ======
-    "writer_save_path": "runs/baseline_restormer_ONN_pad2",  # runs/{run_file_name}
-    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_ONN_pad2",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/baseline_restormer_v2",  # runs/{run_file_name}
+    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_v2",  # ./checkpoints_weights/{run_file_name}
 
 
     # ====== Resume training ======
     "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
-    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_ONN_pad2/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_v2/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Hyperparameters ======
     "batch_size": 64,
@@ -179,8 +179,8 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # load config
-    "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_pad2/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch54_valLoss0.0027_20251104_121210.pth',
+    "weight_save_dir": './checkpoints_weights/baseline_restormer_v2/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'epoch44_valLoss0.0091_20251105_214525.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
@@ -188,7 +188,7 @@ TESTING_CONFIG = {
 
 
     # save config
-    "results_save_dir": './results/baseline_restormer_ONN_pad2',
+    "results_save_dir": './results/baseline_restormer_v2',
     # "results_save_dir": './results/baseline_restormer_ONN_pad2',
     "results_save_name_suffix": '_metrics.json',
 

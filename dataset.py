@@ -65,8 +65,8 @@ def get_dataloaders(dataset_config):
     transform_list = [
         transforms.Resize(dataset_config["resize"]),
         transforms.CenterCrop(dataset_config["center_crop"]),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
+        transforms.ToTensor(),  # from 0~255 to 0~1
+        # transforms.Normalize((0.5,), (0.5,)) # No normalization here, it will distroy the E field simulation
     ]
     if aug_cfg.get("use_random_rotation", False):
         transform_list.append(
