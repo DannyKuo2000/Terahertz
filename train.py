@@ -5,9 +5,15 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
-
 import os
 import time
+
+# ==== 匯入平行化(DDP)模組 ====
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# === 匯入AMP模組
+from torch import amp
 
 # ==== 匯入自定義模組 ====
 from model.autoencoder import Autoencoder
@@ -17,27 +23,53 @@ from dataset import get_dataloaders
 from config import DATASET_CONFIG, ENCODER_CONFIG, RESTORMER_CONFIG, AUTOENCODER_CONFIG, TRAINING_CONFIG
 from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, CosineAnnealingLR
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# === Parallel setup & Device ===
+distributed = TRAINING_CONFIG.get("distributed", False)
+local_rank = 0
+if distributed:
+    local_rank = int(os.environ["LOCAL_RANK"])  # torchrun 會傳入
+    torch.cuda.set_device(local_rank)  # 綁定 GPU
+    if not dist.is_initialized():  # 避免重複初始化
+        dist.init_process_group(backend=TRAINING_CONFIG.get("backend", "nccl"))
+
+device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
-# ========= Training Set Up =========
-writer = SummaryWriter(log_dir=TRAINING_CONFIG["writer_save_path"])
-
-# === Dataset ===
-train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG)
+# === Tensorboard ===
+if distributed:
+    if dist.get_rank() == 0:
+        writer = SummaryWriter(log_dir=TRAINING_CONFIG["writer_save_path"])
+    else:
+        writer = None
+else:
+    writer = SummaryWriter(log_dir=TRAINING_CONFIG["writer_save_path"])
 
 # === Model ===
 encoder = ONN(ENCODER_CONFIG).to(device)
-
 decoder = Restormer(RESTORMER_CONFIG).to(device)
-
 model = Autoencoder(encoder=encoder, decoder=decoder, config=AUTOENCODER_CONFIG).to(device)
+
+if distributed:
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+# --- batch scaling（必須在建立 DataLoader 前） ---
+global_batch = TRAINING_CONFIG.get("batch_size", 64)  # 你想要的有效 global batch
+if distributed:
+    world_size = dist.get_world_size()
+    per_gpu_batch = max(1, global_batch // world_size)
+    print(f"🟢 Distributed training detected — world_size={world_size}, per-GPU batch={per_gpu_batch}")
+else:
+    per_gpu_batch = global_batch
+
+# === Dataset ===
+train_loader, valid_loader, test_loader = get_dataloaders(DATASET_CONFIG, per_gpu_batch, num_workers=TRAINING_CONFIG["num_workers"], distributed=TRAINING_CONFIG["distributed"])
 
 # === Optimizer & Loss ===
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 
-# === 建立 scheduler（若啟用） ===
+# === Scheduler ===
 scheduler = None
 if TRAINING_CONFIG.get("use_scheduler", False):
     sched_type = TRAINING_CONFIG.get("scheduler_type", "ReduceLROnPlateau")
@@ -54,7 +86,7 @@ if TRAINING_CONFIG.get("use_scheduler", False):
 
 #==== Save model ====
 def save_model(model, epoch, val_loss, optimizer=None, scheduler=None, learning_rate=None,
-               save_extra=False, base_dir=TRAINING_CONFIG["checkpoints_weight_save_dir"]):
+               save_extra=False, base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"]):
     # ======
     # 自動分開儲存：
     # weights/      -> 存純模型權重
@@ -72,7 +104,10 @@ def save_model(model, epoch, val_loss, optimizer=None, scheduler=None, learning_
 
     # 1️⃣ 儲存純模型權重
     weight_path = os.path.join(weights_dir, f"epoch{epoch+1}_valLoss{val_loss:.4f}_{timestamp}.pth")
-    torch.save(model.state_dict(), weight_path)
+    if distributed:  # DDP情況下存module
+        torch.save(model.module.state_dict(), weight_path)
+    else:
+        torch.save(model.state_dict(), weight_path)
     print(f"Model weights saved at {weight_path}")
 
     # 2️⃣ 儲存完整 checkpoint（如果 save_extra=True）
@@ -95,60 +130,62 @@ def save_model(model, epoch, val_loss, optimizer=None, scheduler=None, learning_
 
 
 # ==== ONN Material Phase Difference Loss Calculation ====
-def local_contrast_loss(phase: torch.Tensor, sigma, use_weight=True) -> torch.Tensor:
+def local_contrast_loss(phase_list: list[torch.Tensor], sigma, use_weight=True) -> torch.Tensor:
     """
-    計算 phase matrix 的 Local Contrast Loss。
-    Phase 會自動 wrap 到 [-pi, pi]，並計算相鄰元素差分。
+    計算多層 phase matrix 的 Local Contrast Loss，完全 vectorized。
     
     Args:
-        phase: (B, C, H, W) tensor，float32 或 float64，相位值（可以超過 [-pi, pi]）
+        phase_list: list of (B, C, H, W) tensors，每個 tensor 對應一層 ONN material
+        sigma: Gaussian 權重標準差
+        use_weight: 是否使用 Gaussian 權重
         
     Returns:
         loss: 標量 tensor，局部對比損失
     """
-    H, W = phase.shape
-    # 將 phase 壓回 [-pi, pi]
-    phase_wrapped = torch.atan2(torch.sin(phase), torch.cos(phase))
-
-    # 計算水平、垂直方向相鄰差分
-    dx = phase_wrapped[:, 1:] - phase_wrapped[:, :-1]
-    dy = phase_wrapped[1:, :] - phase_wrapped[:-1, :]
-
-    # 差分後也 wrap 回 [-pi, pi], 處理掉跳躍點的問題
+    # 將多層 phase concat 起來 -> (num_layers*B, C, H, W)
+    all_phases = torch.cat(phase_list, dim=0)
+    
+    # wrap phase 到 [-pi, pi]
+    phase_wrapped = torch.atan2(torch.sin(all_phases), torch.cos(all_phases))
+    
+    # 計算水平、垂直方向差分
+    dx = phase_wrapped[:, :, :, 1:] - phase_wrapped[:, :, :, :-1]
+    dy = phase_wrapped[:, :, 1:, :] - phase_wrapped[:, :, :-1, :]
     dx = torch.atan2(torch.sin(dx), torch.cos(dx))
     dy = torch.atan2(torch.sin(dy), torch.cos(dy))
-
+    
     if use_weight:
-        # ---- 建立對應大小的 Gaussian 權重 ----
+        B_total, C, H, W = all_phases.shape
         def make_gaussian(size_x, size_y, sigma):
             x = torch.linspace(-1, 1, size_x)
             y = torch.linspace(-1, 1, size_y)
             xx, yy = torch.meshgrid(x, y, indexing='ij')
             gaussian = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-            gaussian = gaussian / gaussian.mean()  # normalize
-            return gaussian.to(phase.device)
-
-        w_dx = make_gaussian(H, W-1, sigma)   # 對應 dx 的空間
-        w_dy = make_gaussian(H-1, W, sigma)   # 對應 dy 的空間
-
-        # 加上 batch 和 channel 維度
-        w_dx = w_dx.unsqueeze(0).unsqueeze(0)
-        w_dy = w_dy.unsqueeze(0).unsqueeze(0)
-
-        # 乘上權重
+            gaussian = gaussian / gaussian.mean()
+            return gaussian.to(all_phases.device)
+        
+        w_dx = make_gaussian(H, W-1, sigma).unsqueeze(0).unsqueeze(0)
+        w_dy = make_gaussian(H-1, W, sigma).unsqueeze(0).unsqueeze(0)
         dx = dx * w_dx
         dy = dy * w_dy
-
+    
     # loss 計算
     loss = (dx.abs().mean() + dy.abs().mean()) / 2.0
     return loss
 
+# === AMP 設定 ===
+use_amp = TRAINING_CONFIG.get("use_amp", True)
+scaler = amp.GradScaler("cuda", enabled=use_amp)
+
+# === Gradient Accumulation 設定 ===
+accum_steps = TRAINING_CONFIG.get("grad_accum_steps", 1)  # 梯度累積步數，1 表示不累積
+
+
 #==== Train model ====
-def train_model(patience=5, scheduler=None):
+def train_model():
     best_loss = float('inf')
     epochs_no_improve = 0
-    start_epoch = 0  # === 新增 === 起始 epoch
-
+    start_epoch = 0 
 
     # === Resume training 功能 ===
     if TRAINING_CONFIG.get("resume_training", False):
@@ -170,46 +207,81 @@ def train_model(patience=5, scheduler=None):
 
 
     for epoch in range(TRAINING_CONFIG["epochs"]):
+        # Parallel
+        if distributed and hasattr(train_loader.sampler, "set_epoch"):
+            train_loader.sampler.set_epoch(epoch)
+
         model.train()
         epoch_loss = 0
         epoch_recon_loss = 0
         epoch_plc_loss = 0
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+        
+        optimizer.zero_grad()
+        
+        for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
             imgs, _ = batch
             imgs = imgs.to(device)
 
-            if TRAINING_CONFIG["return_phases"]:
-                recon, phase_lists = model(imgs)
+            with amp.autocast("cuda", enabled=use_amp):
+                if TRAINING_CONFIG["return_phases"]:  # calculating PLC loss
+                    recon, phase_lists = model(imgs)
+                    plc_loss = local_contrast_loss(phase_lists, sigma=TRAINING_CONFIG["plc_sigma"], use_weight=TRAINING_CONFIG["use_weight"])
+                    recon_loss = criterion(recon, imgs)  # reconstruction loss
+                    total_loss = recon_loss + TRAINING_CONFIG["plc_loss_weight"] * plc_loss  # total loss
+                else:
+                    recon = model(imgs)
+                    total_loss = criterion(recon, imgs)
 
-                plc_loss = 0.0  # Phase local loss
-                for phase in phase_lists:  # calculating phase local loss for each ONN material 
-                    plc_loss += local_contrast_loss(phase, sigma=TRAINING_CONFIG["plc_sigma"], use_weight=TRAINING_CONFIG["use_weight"])
+                # 平均 loss 避免累積爆大
+                loss_scaled = total_loss / accum_steps
 
-                recon_loss = criterion(recon, imgs)  # reconstruction loss
-                total_loss = recon_loss + TRAINING_CONFIG["plc_loss_weight"] * plc_loss  # total loss
-            else:
-                recon = model(imgs)
-                total_loss = criterion(recon, imgs)
+                # ✅ 主動檢查 NaN，提前阻止爆掉
+                if torch.isnan(loss_scaled):
+                    print(f"[Rank {dist.get_rank()}] NaN Detected at Iter {i}, skip batch")
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
 
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
+            # backward with AMP
+            scaler.scale(loss_scaled).backward()
 
-            if TRAINING_CONFIG["return_phases"]:
-                epoch_recon_loss += recon_loss.item()
-                epoch_plc_loss += plc_loss.item()
-            epoch_loss += total_loss.item()
+            # 更新權重
+            if (i + 1) % accum_steps == 0 or (i + 1) == len(train_loader):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+
+            # ✅ DDP loss reduction (讓所有 GPU loss 平均一致)
+            with torch.no_grad():
+                total_loss_reduced = total_loss.clone()
+                dist.all_reduce(total_loss_reduced, op=dist.ReduceOp.SUM)
+                total_loss_reduced /= dist.get_world_size()
+
+                if TRAINING_CONFIG["return_phases"]:
+                    recon_loss_reduced = recon_loss.clone()
+                    plc_loss_reduced = plc_loss.clone()
+                    dist.all_reduce(recon_loss_reduced, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(plc_loss_reduced, op=dist.ReduceOp.SUM)
+                    recon_loss_reduced /= dist.get_world_size()
+                    plc_loss_reduced /= dist.get_world_size()
+
+            # ✅ 只在 rank=0 累加 loss，不然會累加 N 次
+            if dist.get_rank() == 0:
+                epoch_loss += total_loss_reduced.item()
+                if TRAINING_CONFIG["return_phases"]:
+                    epoch_recon_loss += recon_loss_reduced.item()
+                    epoch_plc_loss += plc_loss_reduced.item()
 
         if TRAINING_CONFIG["return_phases"]:
             print(f"Ratio of recon and plc loss: {epoch_recon_loss/epoch_plc_loss:.4f}")
+
         avg_loss = epoch_loss / len(train_loader)
         print(f"Epoch {epoch+1}, Total Loss: {avg_loss:.4f}")
         writer.add_scalar("Loss/train", avg_loss, epoch)
 
-        # === Validate ===
+        # === Validation ===
         val_loss = validate_model(epoch)
 
-        # === 如果有 scheduler，就更新 ===
+        # === Scheduler step ===
         if scheduler is not None:
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_loss)
@@ -223,14 +295,14 @@ def train_model(patience=5, scheduler=None):
             save_model(model, epoch, val_loss, save_extra=False)  # 儲存最佳模型
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                save_model(model, epoch, val_loss, save_extra=True)
+            if epochs_no_improve >= TRAINING_CONFIG["patience"]:
+                save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, save_extra=True)
                 print(f"Early stopping triggered at epoch {epoch+1}")
                 break
         
         # === Last save ===
         if epoch + 1 == TRAINING_CONFIG["epochs"]:
-            save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weight_save_dir"], save_extra=True)
+            save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"], save_extra=True)
 
         # === Logging images to Tensorboard ===
         with torch.no_grad():
@@ -242,14 +314,18 @@ def train_model(patience=5, scheduler=None):
 
             img_grid = vutils.make_grid(sample_imgs.cpu(), normalize=True, scale_each=True)
             recon_grid = vutils.make_grid(recon_imgs.cpu(), normalize=True, scale_each=True)
-
-            writer.add_image('Original', img_grid, global_step=epoch)
-            writer.add_image('Reconstructed', recon_grid, global_step=epoch)
+            if local_rank == 0:
+                writer.add_image('Original', img_grid, global_step=epoch)
+                writer.add_image('Reconstructed', recon_grid, global_step=epoch)
+                print(f"Rank {local_rank}: recon max {recon_imgs.max()}, min {recon_imgs.min()}")
 
     writer.close()
+    if distributed: # 訓練完解除DDP
+        dist.destroy_process_group()
+
 
 #==== Validate model ====
-def validate_model(epoch, scheduler=scheduler):
+def validate_model(epoch):
     model.eval()
     epoch_loss = 0
     with torch.no_grad():
@@ -269,4 +345,4 @@ def validate_model(epoch, scheduler=scheduler):
     return val_loss
 
 if __name__ == "__main__":
-    train_model(patience=TRAINING_CONFIG["patience"], scheduler=scheduler)
+    train_model()

@@ -9,8 +9,6 @@ DATASET_CONFIG = {
     "seed": 42,  # "random"或一個數字 (只有 MNIST+EMNIST 使用)，預設用42
     "root": "./data/RealDataset-800-v1",  # Custom dataset 的資料夾 (只有 Custom dataset專用)
     
-    "batch_size": 64,
-    "num_workers": 0,
     "valid_ratio": 0.1,   # 10% 驗證
     "test_ratio": 0.1,    # 10% 測試
     "resize": 128, # 把最短邊resize到128
@@ -116,8 +114,8 @@ RESTORMER_CONFIG = {
     # Embedding & Blocks
     #"embed_dim": 48,                 # 初始通道數
     "embed_dim": 16,
-    #"num_blocks": [4, 6, 6, 8],      # 每層 RestormerBlock 數量
-    "num_blocks": [2, 3, 3, 4],
+    "num_blocks": [4, 6, 6, 8],      # 每層 RestormerBlock 數量
+    #"num_blocks": [2, 3, 3, 4],
     "num_heads":  [1, 2, 4, 8],      # Multi-head Attention 每層 head 數量
 
     # Training Stability
@@ -145,26 +143,34 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Set up ======
-    "writer_save_path": "runs/baseline_restormer_v2",  # runs/{run_file_name}
-    "checkpoints_weight_save_dir": "./checkpoints_weights/baseline_restormer_v2",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/baseline_restormer_v3",  # runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/baseline_restormer_v3",  # ./checkpoints_weights/{run_file_name}
 
 
     # ====== Resume training ======
     "resume_training": False,  # 開關，是否從 checkpoint 繼續訓練
-    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_v2/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/baseline_restormer_v3/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Hyperparameters ======
-    "batch_size": 64,
+    # === Parallel ===
+    "distributed": True,
+    "num_workers": 8,
+    # === Memory and Time Optimization ===
+    "use_amp": True,  # Automatic Mixed Precision（自動混合精度）減少計算量跟memory
+    "grad_accum_steps": 2,  # 切成幾個mini batch
+    # === Others ===
+    "batch_size": 32,
     "epochs": 100,
     "learning_rate": 1e-3,
-    "patience": 5,
-    "use_scheduler": False,                     # ✅ 是否啟用 scheduler
-    "scheduler_type": "ReduceLROnPlateau",     # ✅ 可選："StepLR", "CosineAnnealingLR" 等
-    "scheduler_params": {                      # ✅ 對應不同 scheduler 的參數
-        "mode": "min",
-        "factor": 0.5,
-        "patience": 3,
-        "verbose": True,
+    "patience": 10,
+    "use_scheduler": True,                     # 開關，是否啟用 scheduler
+    "scheduler_type": "ReduceLROnPlateau",     # 可選："StepLR", "CosineAnnealingLR" 等
+    "scheduler_params": {                      # 對應不同 scheduler 的參數
+        "mode": "min",  # minimization val loss
+        "factor": 0.5,  # LR = LR * 0.5
+        "min_lr": 1e-6,  # 設定min of LR
+        "patience": 4,  # 4個epochs沒下降，就降低LR
+        "verbose": True,  # 印出LR改變infor
     },
 
     # ====== Phase Local Contrast loss =======動態調整？？？

@@ -19,6 +19,9 @@ from torch.utils.data import DataLoader, random_split, Dataset, Subset, ConcatDa
 from torchvision import datasets, transforms
 from config import DATASET_CONFIG
 
+# ====== 平行化 ======
+from torch.utils.data.distributed import DistributedSampler
+
 class CustomImageDataset(Dataset):
     """
     自定義資料集，讀取單一資料夾內的圖片 (001.png, 002.png ...)
@@ -38,7 +41,7 @@ class CustomImageDataset(Dataset):
             image = self.transform(image)
         return image, 0   # 這裡沒有 label，就給個 dummy=0
 
-def get_dataloaders(dataset_config):
+def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
     """
     生成訓練、驗證、測試的 DataLoader
     dataset_config (dict):
@@ -52,6 +55,7 @@ def get_dataloaders(dataset_config):
         - augmentation: dict
         - seed: int (optional)
     """
+
     # ====== 隨機種子 ======
     seed = dataset_config.get("seed", 42)
     if seed == "random":  # 允許自動亂數種子
@@ -134,12 +138,6 @@ def get_dataloaders(dataset_config):
             [train_size, valid_size, test_size],
             generator=torch.Generator().manual_seed(seed)
         )
-
-        train_loader = DataLoader(train_dataset, batch_size=dataset_config["batch_size"], shuffle=True, num_workers=dataset_config["num_workers"])
-        valid_loader = DataLoader(valid_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
-        test_loader = DataLoader(test_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
-        return train_loader, valid_loader, test_loader
-
     else:
         raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
@@ -154,9 +152,47 @@ def get_dataloaders(dataset_config):
     )
 
     # ====== DataLoader ======
-    train_loader = DataLoader(train_dataset, batch_size=dataset_config["batch_size"], shuffle=True, num_workers=dataset_config["num_workers"])
+    """train_loader = DataLoader(train_dataset, batch_size=dataset_config["batch_size"], shuffle=True, num_workers=dataset_config["num_workers"])
     valid_loader = DataLoader(valid_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
-    test_loader = DataLoader(test_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])
+    test_loader = DataLoader(test_dataset, batch_size=dataset_config["batch_size"], shuffle=False, num_workers=dataset_config["num_workers"])"""
+
+    # ====== Sampler 設定 ======
+    if distributed:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        valid_sampler = DistributedSampler(valid_dataset, shuffle=False)
+        test_sampler  = DistributedSampler(test_dataset,  shuffle=False)
+    else:
+        train_sampler = None
+        valid_sampler = None
+        test_sampler  = None
+
+    # ====== DataLoader 建立 ======
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=per_gpu_batch,
+        shuffle=(train_sampler is None),   # 單卡用 shuffle、多卡交給 sampler
+        num_workers=num_workers,
+        sampler=train_sampler,
+        pin_memory=True,
+    )
+
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=per_gpu_batch,
+        shuffle=False,
+        num_workers=num_workers,
+        sampler=valid_sampler,
+        pin_memory=True,
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=per_gpu_batch,
+        shuffle=False,
+        num_workers=num_workers,
+        sampler=test_sampler,
+        pin_memory=True,
+    )
 
     # ====== Visualization ======
     print(f"[Dataset] Train size = {len(train_dataset)} | Valid size = {len(valid_dataset)} | Test size = {len(test_dataset)}")
