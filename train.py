@@ -104,16 +104,23 @@ def save_model(model, epoch, val_loss, optimizer=None, scheduler=None, learning_
 
     # 1️⃣ 儲存純模型權重
     weight_path = os.path.join(weights_dir, f"epoch{epoch+1}_valLoss{val_loss:.4f}_{timestamp}.pth")
-    if distributed:  # DDP情況下存module
+    # 儲存純模型權重（統一儲存 module 的 state_dict，並在非 DDP 時直接使用 model.state_dict()）
+    if distributed and hasattr(model, "module"):
         torch.save(model.module.state_dict(), weight_path)
     else:
         torch.save(model.state_dict(), weight_path)
     print(f"Model weights saved at {weight_path}")
 
     # 2️⃣ 儲存完整 checkpoint（如果 save_extra=True）
+    # 儲存完整 checkpoint（建議也把 model_state_dict 一致性處理）
     if save_extra:
+        if distributed and hasattr(model, "module"):
+            model_state = model.module.state_dict()
+        else:
+            model_state = model.state_dict()
+
         checkpoint = {
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state,
             'epoch': epoch,
             'val_loss': val_loss
         }
@@ -130,32 +137,29 @@ def save_model(model, epoch, val_loss, optimizer=None, scheduler=None, learning_
 
 
 # ==== ONN Material Phase Difference Loss Calculation ====
-def local_contrast_loss(phase_list: list[torch.Tensor], sigma, use_weight=True) -> torch.Tensor:
+def local_contrast_loss(phase_list: list[torch.Tensor], sigma, use_weight=True, loss_mode: str = "local", margin) -> torch.Tensor:
     """
     計算多層 phase matrix 的 Local Contrast Loss，完全 vectorized。
-    
-    Args:
-        phase_list: list of (B, C, H, W) tensors，每個 tensor 對應一層 ONN material
-        sigma: Gaussian 權重標準差
-        use_weight: 是否使用 Gaussian 權重
-        
-    Returns:
-        loss: 標量 tensor，局部對比損失
+    loss_mode:
+        "local"：原本形式（|dx| + |dy|）
+        "square"：平方懲罰（dx^2 + dy^2）
+        "std"：局部變異數（更強調差異）
     """
-    # 將多層 phase concat 起來 -> (num_layers*B, C, H, W)
-    all_phases = torch.cat(phase_list, dim=0)
-    
+    # 將多層 phase concat 起來 -> (N, H, W)
+    all_phases = torch.cat([p.unsqueeze(0) for p in phase_list], dim=0)
+
     # wrap phase 到 [-pi, pi]
     phase_wrapped = torch.atan2(torch.sin(all_phases), torch.cos(all_phases))
     
     # 計算水平、垂直方向差分
-    dx = phase_wrapped[:, :, :, 1:] - phase_wrapped[:, :, :, :-1]
-    dy = phase_wrapped[:, :, 1:, :] - phase_wrapped[:, :, :-1, :]
+    dx = phase_wrapped[:, :, 1:] - phase_wrapped[:, :, :-1]
+    dy = phase_wrapped[:, 1:, :] - phase_wrapped[:, :-1, :]
     dx = torch.atan2(torch.sin(dx), torch.cos(dx))
     dy = torch.atan2(torch.sin(dy), torch.cos(dy))
     
+    # 權重
     if use_weight:
-        B_total, C, H, W = all_phases.shape
+        N, C, H, W = all_phases.shape
         def make_gaussian(size_x, size_y, sigma):
             x = torch.linspace(-1, 1, size_x)
             y = torch.linspace(-1, 1, size_y)
@@ -168,14 +172,31 @@ def local_contrast_loss(phase_list: list[torch.Tensor], sigma, use_weight=True) 
         w_dy = make_gaussian(H-1, W, sigma).unsqueeze(0).unsqueeze(0)
         dx = dx * w_dx
         dy = dy * w_dy
-    
-    # loss 計算
-    loss = (dx.abs().mean() + dy.abs().mean()) / 2.0
+
+    # ====== Loss mode switch ======
+    if loss_mode == "mean":
+        loss = (dx.abs().mean() + dy.abs().mean())
+
+    elif loss_mode == "margin":
+        # ---- Margin-based Gradient Loss (Hinge style) ----
+        # penalty = max(0, margin - |grad|)
+        dx_penalty = torch.relu(margin - dx.abs())
+        dy_penalty = torch.relu(margin - dy.abs())
+        # mean penalty
+        loss = (dx_penalty.mean() + dy_penalty.mean()) * 0.5
+
+    else:
+        raise ValueError(f"Unknown loss_mode: {loss_mode}")
+    # ======================================
+
     return loss
 
 # === AMP 設定 ===
 use_amp = TRAINING_CONFIG.get("use_amp", True)
-scaler = amp.GradScaler("cuda", enabled=use_amp)
+# 正確的初始化方式：不要把 "cuda" 當 positional arg 傳入
+scaler = amp.GradScaler(enabled=use_amp)
+# 建議：在使用 autocast 時用 device_type 明確指定
+_amp_device_type = "cuda" if torch.cuda.is_available() and device.type.startswith("cuda") else "cpu"
 
 # === Gradient Accumulation 設定 ===
 accum_steps = TRAINING_CONFIG.get("grad_accum_steps", 1)  # 梯度累積步數，1 表示不累積
@@ -192,7 +213,11 @@ def train_model():
         resume_path = TRAINING_CONFIG.get("resume_checkpoint_path", None)
         if resume_path and os.path.exists(resume_path):
             checkpoint = torch.load(resume_path, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
+            if distributed and hasattr(model, "module"):
+                model.module.load_state_dict(checkpoint["model_state_dict"])
+            else:
+                model.load_state_dict(checkpoint["model_state_dict"])
+
             if "optimizer_state_dict" in checkpoint and optimizer is not None:
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             if "scheduler_state_dict" in checkpoint and scheduler is not None:
@@ -235,9 +260,10 @@ def train_model():
                 # 平均 loss 避免累積爆大
                 loss_scaled = total_loss / accum_steps
 
-                # ✅ 主動檢查 NaN，提前阻止爆掉
+                # 主動檢查 NaN，並在 distributed 時嘗試取得 rank（非 distributed 則顯示 rank=0）
                 if torch.isnan(loss_scaled):
-                    print(f"[Rank {dist.get_rank()}] NaN Detected at Iter {i}, skip batch")
+                    rank_for_msg = dist.get_rank() if distributed and dist.is_initialized() else 0
+                    print(f"[Rank {rank_for_msg}] NaN Detected at Iter {i}, skip batch")
                     optimizer.zero_grad(set_to_none=True)
                     continue
 
@@ -250,36 +276,61 @@ def train_model():
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
 
-            # ✅ DDP loss reduction (讓所有 GPU loss 平均一致)
+            # DDP loss reduction（只有在 distributed 啟用時做 all_reduce）
             with torch.no_grad():
-                total_loss_reduced = total_loss.clone()
-                dist.all_reduce(total_loss_reduced, op=dist.ReduceOp.SUM)
-                total_loss_reduced /= dist.get_world_size()
+                if distributed and dist.is_initialized():
+                    total_loss_reduced = total_loss.clone()
+                    dist.all_reduce(total_loss_reduced, op=dist.ReduceOp.SUM)
+                    total_loss_reduced = total_loss_reduced / max(1, dist.get_world_size())
 
-                if TRAINING_CONFIG["return_phases"]:
-                    recon_loss_reduced = recon_loss.clone()
-                    plc_loss_reduced = plc_loss.clone()
-                    dist.all_reduce(recon_loss_reduced, op=dist.ReduceOp.SUM)
-                    dist.all_reduce(plc_loss_reduced, op=dist.ReduceOp.SUM)
-                    recon_loss_reduced /= dist.get_world_size()
-                    plc_loss_reduced /= dist.get_world_size()
+                    if TRAINING_CONFIG["return_phases"]:
+                        recon_loss_reduced = recon_loss.clone()
+                        plc_loss_reduced = plc_loss.clone()
+                        dist.all_reduce(recon_loss_reduced, op=dist.ReduceOp.SUM)
+                        dist.all_reduce(plc_loss_reduced, op=dist.ReduceOp.SUM)
+                        recon_loss_reduced = recon_loss_reduced / max(1, dist.get_world_size())
+                        plc_loss_reduced = plc_loss_reduced / max(1, dist.get_world_size())
+                else:
+                    # 非分散式直接把原本的 tensor 當做 reduced 結果
+                    total_loss_reduced = total_loss.detach()
+                    if TRAINING_CONFIG["return_phases"]:
+                        recon_loss_reduced = recon_loss.detach()
+                        plc_loss_reduced = plc_loss.detach()
 
-            # ✅ 只在 rank=0 累加 loss，不然會累加 N 次
-            if dist.get_rank() == 0:
+            # 只在 rank 0 累加（在非分散式時 rank 視為 0）
+            rank_for_accum = dist.get_rank() if distributed and dist.is_initialized() else 0
+            if rank_for_accum == 0:
                 epoch_loss += total_loss_reduced.item()
                 if TRAINING_CONFIG["return_phases"]:
                     epoch_recon_loss += recon_loss_reduced.item()
                     epoch_plc_loss += plc_loss_reduced.item()
 
-        if TRAINING_CONFIG["return_phases"]:
+        if TRAINING_CONFIG["return_phases"] and dist.get_rank() == 0:
             print(f"Ratio of recon and plc loss: {epoch_recon_loss/epoch_plc_loss:.4f}")
 
         avg_loss = epoch_loss / len(train_loader)
-        print(f"Epoch {epoch+1}, Total Loss: {avg_loss:.4f}")
-        writer.add_scalar("Loss/train", avg_loss, epoch)
+        if (not distributed) or (dist.get_rank() == 0):
+            print(f"Epoch {epoch+1}, Total Loss: {avg_loss:.4f}")
+        if writer is not None and ((not distributed) or dist.get_rank() == 0):
+            writer.add_scalar("Loss/train", avg_loss, epoch)
 
-        # === Validation ===
-        val_loss = validate_model(epoch)
+
+        # === Validation (only rank 0 runs; then broadcast val_loss to all ranks) ===
+        rank = dist.get_rank() if distributed and dist.is_initialized() else 0
+
+        if rank == 0:
+            val_loss = validate_model(epoch)
+            val_tensor = torch.tensor([val_loss], device=device)
+        else:
+            val_tensor = torch.tensor([0.0], device=device)
+
+        # sync: 確保所有 ranks 都到這裡再廣播（避免 race）
+        if distributed and dist.is_initialized():
+            dist.barrier()
+            dist.broadcast(val_tensor, src=0)
+            dist.barrier()
+
+        val_loss = float(val_tensor.item())
 
         # === Scheduler step ===
         if scheduler is not None:
@@ -292,17 +343,21 @@ def train_model():
         if val_loss < best_loss:
             best_loss = val_loss
             epochs_no_improve = 0
-            save_model(model, epoch, val_loss, save_extra=False)  # 儲存最佳模型
+            if (not distributed) or (dist.get_rank() == 0):
+                # 儲存最佳模型
+                save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"], save_extra=True) 
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= TRAINING_CONFIG["patience"]:
-                save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, save_extra=True)
+                if (not distributed) or (dist.get_rank() == 0):
+                    save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"], save_extra=True)
                 print(f"Early stopping triggered at epoch {epoch+1}")
                 break
         
         # === Last save ===
         if epoch + 1 == TRAINING_CONFIG["epochs"]:
-            save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"], save_extra=True)
+            if (not distributed) or (dist.get_rank() == 0):
+                save_model(model, epoch, val_loss, optimizer=optimizer, scheduler=scheduler, learning_rate=TRAINING_CONFIG["learning_rate"], base_dir=TRAINING_CONFIG["checkpoints_weights_save_dir"], save_extra=True)
 
         # === Logging images to Tensorboard ===
         with torch.no_grad():
@@ -315,17 +370,21 @@ def train_model():
             img_grid = vutils.make_grid(sample_imgs.cpu(), normalize=True, scale_each=True)
             recon_grid = vutils.make_grid(recon_imgs.cpu(), normalize=True, scale_each=True)
             if local_rank == 0:
-                writer.add_image('Original', img_grid, global_step=epoch)
-                writer.add_image('Reconstructed', recon_grid, global_step=epoch)
-                print(f"Rank {local_rank}: recon max {recon_imgs.max()}, min {recon_imgs.min()}")
+                if writer is not None and (not distributed or (distributed and dist.is_initialized() and dist.get_rank() == 0)):
+                    writer.add_image('Original', img_grid, global_step=epoch)
+                    writer.add_image('Reconstructed', recon_grid, global_step=epoch)
+                    print(f"Rank {local_rank}: recon max {recon_imgs.max()}, min {recon_imgs.min()}")
 
-    writer.close()
+    if writer is not None:
+        writer.close()
     if distributed: # 訓練完解除DDP
         dist.destroy_process_group()
 
 
 #==== Validate model ====
 def validate_model(epoch):
+    if distributed and dist.get_rank() != 0:
+        return float('inf')
     model.eval()
     epoch_loss = 0
     with torch.no_grad():
@@ -340,8 +399,10 @@ def validate_model(epoch):
             epoch_loss += loss.item()
 
     val_loss = epoch_loss / len(valid_loader)
-    print(f"Validation Loss at Epoch {epoch+1}: {val_loss:.4f}")
-    writer.add_scalar("Loss/validation", val_loss, epoch)
+    if (not distributed) or (dist.get_rank() == 0):
+        print(f"Validation Loss at Epoch {epoch+1}: {val_loss:.4f}")
+    if writer is not None and ((not distributed) or dist.get_rank() == 0):
+        writer.add_scalar("Loss/validation", val_loss, epoch)
     return val_loss
 
 if __name__ == "__main__":

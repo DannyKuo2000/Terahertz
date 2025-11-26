@@ -24,10 +24,6 @@ DATASET_CONFIG = {
 # --------------------------------------------------
 # Optical Encoder Configuration
 # --------------------------------------------------
-# Basic calculation: 
-# ONN size: 0.00075 (m)
-# simulation pixel size: 0.00075/4 (m) = 0.0001875 (m) (每個ONN element 用4*4的模擬去跑)
-# image length = 0.03 (m) => 0.03/0.0001875 = 160 pixels
 ENCODER_CONFIG = {
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
     "use_input": False,  # 是否使用自訂source
@@ -182,8 +178,6 @@ TRAINING_CONFIG = {
     "plc_loss_weight": 1e-4,  # loss weight of phase local contrast loss, 1e-5沒有效果
     "plc_sigma": 100,  # 標準差為幾個單位
     "use_weight": True,
-    "loss_mode": "margin"  # "margin": Margin-based Gradient Loss, "mean"
-    #"margin":  # for margin mode only
 }
 
 # --------------------------------------------------
@@ -192,7 +186,7 @@ TRAINING_CONFIG = {
 TESTING_CONFIG = {    
     # load config
     "weight_save_dir": './checkpoints_weights/baseline_fullrestormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch72_valLoss0.0005_20251120_130540.pth',
+    "weight_save_name": 'epoch82_valLoss0.0005_20251118_205811.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights

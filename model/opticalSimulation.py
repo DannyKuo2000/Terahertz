@@ -916,17 +916,17 @@ class ONN(nn.Module):
         diffractive_layer_index += 1
         total_index += 1
 
-        self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
-                                    pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-                                    frame_inner=frame_inner, frame_outer=frame_outer))
-        self.layer_names.append(f"{total_index}_LensLayer")
-        total_index += 1
+        # self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
+        #                             pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
+        #                             frame_inner=frame_inner, frame_outer=frame_outer))
+        # self.layer_names.append(f"{total_index}_LensLayer")
+        # total_index += 1
         
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-        diffractive_layer_index += 1
-        total_index += 1
+        # self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
+        #                                     pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
+        # self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
+        # diffractive_layer_index += 1
+        # total_index += 1
 
         # Sensor / Noise
         if active_sensor:
