@@ -6,7 +6,7 @@
 # simulation pixel size: 0.00075/4 (m) = 0.0001875 (m) (每個ONN element 用4*4的模擬去跑)
 # image length = 0.03 (m) => 0.03/0.0001875 = 160 pixels
 ENCODER_CONFIG = {
-    "image_path": "data/GroundTruth-800-v1/001.png",
+    "image_path": "data/GroundTruth-800-v1/043.png",
     "save_path": "results/simulateDiffractiveLayer3_GT001",
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
@@ -36,7 +36,8 @@ ENCODER_CONFIG = {
     "num_size": 128*4,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
     #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
-    "z": [0.142, 0.041],        # 層間距離 (m)
+    #"z": [0.142, 0.041],        # 層間距離 (m)
+    "z": [0.01, 0.045],
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,
     "window": "hann",
@@ -51,7 +52,7 @@ ENCODER_CONFIG = {
 
 
     #====== LensLayer ======
-    "focal_length": 0.029,
+    "focal_length": 0.045, #0.029,
     "dx": 0.00075/4,
     "num_size": 128*4,
     "wavelength": 2.998e8 / 0.2004e12,

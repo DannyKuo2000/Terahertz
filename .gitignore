@@ -8,5 +8,6 @@ checkpoints/
 results/
 runs/
 data/
+other_data/
 inference_results/
 sample_data/
