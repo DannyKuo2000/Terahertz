@@ -270,7 +270,7 @@ if __name__ == "__main__":
 
     # 印出每層的 output (shape)
     for name, out in all_outputs:
-        print(name, out.shape)
+        print(name, out.shape)    
 
         # 如果要處理成 intensity
         if torch.is_complex(out):
