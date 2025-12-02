@@ -269,7 +269,7 @@ if __name__ == "__main__":
     noise_level = 0.02
 
     # 印出每層的 output (shape)
-    for name, out in all_outputs:
+    for name, out in all_outputs: # 測試
         print(name, out.shape)    
 
         # 如果要處理成 intensity
