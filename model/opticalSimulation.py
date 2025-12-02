@@ -218,6 +218,8 @@ class DiffractiveLayer(nn.Module):
                 H[argument < 0] = 0.0
 
         self.H = torch.from_numpy(H.astype(np.complex64)).to(device)
+        # Step 1~4這幾步就像是在製作一個濾鏡 (Filter)。這個濾鏡 self.H 的作用是：告訴光場中每一個頻率成分，「你在這段 z 距離的飛行中，相位需要轉動多少」
+
 
         # ==============================================
         # Step 5. aliasing 檢查
@@ -696,6 +698,8 @@ class SensorLayer(nn.Module):
 
         # --- Step 4: 轉換到Intensity(相機感受到的是能量、熱) ---
         I_crop = torch.abs(E_crop)
+        print(torch.min(I_crop))
+        print(torch.max(I_crop))
         I_crop = I_crop.to(torch.float32)
 
         # 回傳 intensity 而不是 complex

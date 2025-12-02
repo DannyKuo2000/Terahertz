@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 import os
 from PIL import Image
-from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SourceLayer
+from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
 from simulateDiffractiveLayer3_config import ENCODER_CONFIG
 
 # ====== Image Loader ======
@@ -97,6 +97,11 @@ class ONN(nn.Module):
         window          = config["window"]
         mask_evanescent = config["mask_evanescent"]
         reverse_z       = config["reverse_z"]
+
+        # MaterialLayer
+        num_size_material = config["num_size_material"]
+        block_size = config["block_size"]
+        return_phases = config["return_phases"]
 
         # LensLayer 
         focal_length = config["focal_length"]
@@ -260,6 +265,9 @@ if __name__ == "__main__":
     # forward，要求所有中間 layer output
     final_output, all_outputs = model(E0, return_intermediate=True)
 
+    gain = 1.5
+    noise_level = 0.02
+
     # 印出每層的 output (shape)
     for name, out in all_outputs:
         print(name, out.shape)
@@ -269,6 +277,11 @@ if __name__ == "__main__":
             img = (out.abs() ** 2)
         else:
             img = out.squeeze()
+        
+        img = img * gain
+        noise = torch.randn_like(img) * noise_level
+        img = img + noise
+        img = torch.clamp(img, 0, 1)
 
-        vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"{name}_abs.png"), normalize=True)
+        vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"{name}_abs.png"), normalize=False)
         print(f"[ONN DEBUG] Saved layer '{name}' intensity output")
