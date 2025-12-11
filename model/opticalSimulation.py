@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision.transforms as T
 import numpy as np
 import math
+from PIL import Image
 from config import ENCODER_CONFIG
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -54,9 +56,16 @@ class SourceLayer(nn.Module):
         if self.use_input:
             if self.input is None:
                 raise ValueError("use_input=True 時必須在 init 傳入 condition")
+            
+            # 讀入圖片
+            img = Image.open(self.input).convert("L")  # 灰階
+            transform = T.ToTensor()
+            source_background = transform(img).unsqueeze(0)  # (1, 1, H, W)
+
+
 
             # ✅ 保證 self.input 在同一 device
-            input_resized = self.resize_pad(self.input.to(device=device, dtype=x.dtype))
+            input_resized = self.resize_pad(source_background.to(device=device, dtype=x.dtype))
             return x * input_resized
 
         else:

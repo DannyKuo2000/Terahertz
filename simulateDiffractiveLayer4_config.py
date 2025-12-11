@@ -6,11 +6,11 @@
 # simulation pixel size: 0.00075/4 (m) = 0.0001875 (m) (每個ONN element 用4*4的模擬去跑)
 # image length = 0.03 (m) => 0.03/0.0001875 = 160 pixels
 ENCODER_CONFIG = {
-    "image_path": "data/GroundTruth-800-v1/043.png",
-    "save_path": "results/simulateDiffractiveLayer3_GT043",
+    "image_path": "other_data/NVLab251205_measurement/MultiSnap_2025-12-05_17-44-23_0911_0000.bmp",
+    "save_path": "results/NVLab251205_measurement",
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
-    "use_input": True,  # 是否使用自訂source
+    "use_input": False,  # 是否使用自訂source
     "input": "other_data/NVLab251128_measurement/MultiSnap_2025-11-28_17-24-11_0129_0000.bmp",  # source
     "mode_source": "white",  # 不使用自訂source的話，要使用"white" or "gaussian"
     "size_source": (160, 160),  # 想要製作的gaussian beam大小
@@ -25,19 +25,22 @@ ENCODER_CONFIG = {
     "new_size_source": (160, 160),  # final size, e.g., (H, W)
 
     #====== ResizePadLayer ======
-    "resize_size": (160, 160),  # resize size of input, e.g., (H, W)
-    "pad_size": (512, 512),  # final size of input, e.g., (H, W)
+    # "resize_size": (160, 160),  # resize size of input, e.g., (H, W)
+    # "pad_size": (512, 512),  # final size of input, e.g., (H, W)
+    "resize_size": (256, 256),  # resize size, e.g., (H, W)
+    "pad_size": (256, 256),  # final size, e.g., (H, W)
 
     #====== Number of MaterialLayer ======
     "num_layers": 0,          # ONN layer數量
 
     #====== DiffractiveLayer ======
-    "dx": 0.00075/4,            # 空間解析度 (m)
-    "num_size": 128*4,          # 每層大小
+    # "dx": 0.00075/2,            # 空間解析度 (m)
+    "dx": 0.000234375,
+    "num_size": 128*2,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
     #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
-    "z": [0.15, 0.045],
+    "z": [0.01],
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,
     "window": "hann",
@@ -47,14 +50,14 @@ ENCODER_CONFIG = {
     
     #====== MaterialLayer ======
     "num_size_material": 128,
-    "block_size": (4, 4),
+    "block_size": (2, 2),
     "return_phases": False,  # 開關: return phases for manufacture loss calculation
 
 
     #====== LensLayer ======
     "focal_length": 0.075, #0.029, #0.075
-    "dx": 0.00075/4,
-    "num_size": 128*4,
+    "dx": 0.00075/2,
+    "num_size": 128*2,
     "wavelength": 2.998e8 / 0.2004e12,
     "pupil_type": "circular",
     "pupil_radius": 0.02375,
@@ -84,6 +87,6 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ======
-    "gain": 1.5,
+    "gain": 1,
     "noise_level": 0,
 }

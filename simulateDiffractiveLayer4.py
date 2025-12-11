@@ -1,7 +1,5 @@
 # ======
-# This file is for real dataset detailed parameters verification,
-# to check if real and simulation images are identical, 
-# so that we could verificate the camera region 
+# This file is for real NMLab251205_measurement check 
 # ======
 import torch
 import torch.nn as nn
@@ -14,18 +12,22 @@ import torchvision.utils as vutils
 import os
 from PIL import Image
 from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
-from simulateDiffractiveLayer3_config import ENCODER_CONFIG
+from simulateDiffractiveLayer4_config import ENCODER_CONFIG
 
 # ====== Image Loader ======
-def load_image(path, size=160):
+def load_image(path, cut=(288, 288), size=(160, 160)):
     img = Image.open(path).convert("L")
     print(f"Original size {img.size}")
-    ratio = size / min(img.size[0], img.size[1])
-    img = img.resize((int(img.size[0]*ratio), int(img.size[1]*ratio)), Image.BICUBIC)
-    print(f"Resized size {img.size}")
-    img_processed = img.crop([img.size[0]//2-size//2, img.size[1]//2-size//2, img.size[0]//2+(size-size//2), img.size[1]//2+(size-size//2)])
-    print(f"Processed size {img_processed.size}")
-    img_array = np.array(img_processed, dtype=np.float32) / 255.0
+    
+    if cut is not None:
+        img = img.crop([img.size[0]//2-cut[0]//2, img.size[1]//2-cut[1]//2, img.size[0]//2+(cut[0]-cut[0]//2), img.size[1]//2+(cut[1]-cut[1]//2)])
+        print(f"Cutted size {img.size}")
+    
+    if size is not None:
+        img = img.resize((size[0], size[1]), Image.BICUBIC)
+        print(f"Resized size {img.size}")
+    
+    img_array = np.array(img, dtype=np.float32) / 255.0
     return img_array
 
 # ====== Image Moving ======
@@ -141,15 +143,15 @@ class ONN(nn.Module):
         diffractive_layer_index = 1
         material_layer_index = 1
         
-        self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
-        total_index += 1
+        # self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
+        # self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
+        # resize_pad_layer_index += 1
+        # total_index += 1
 
-        self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                                       center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
-        self.layer_names.append(f"{total_index}_SourceLayer")
-        total_index += 1
+        # self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
+        #                                center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+        # self.layer_names.append(f"{total_index}_SourceLayer")
+        # total_index += 1
 
         self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
         self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
@@ -178,17 +180,17 @@ class ONN(nn.Module):
         diffractive_layer_index += 1
         total_index += 1
 
-        self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
-                                    pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-                                    frame_inner=frame_inner, frame_outer=frame_outer))
-        self.layer_names.append(f"{total_index}_LensLayer")
-        total_index += 1
+        # self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
+        #                             pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
+        #                             frame_inner=frame_inner, frame_outer=frame_outer))
+        # self.layer_names.append(f"{total_index}_LensLayer")
+        # total_index += 1
         
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-        diffractive_layer_index += 1
-        total_index += 1
+        # self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
+        #                                     pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
+        # self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
+        # diffractive_layer_index += 1
+        # total_index += 1
 
         # Sensor / Noise
         if active_sensor:
@@ -202,10 +204,10 @@ class ONN(nn.Module):
             self.layer_names.append(f"{total_index}_SensorNoiseLayer")
             total_index += 1
         
-        self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
-        total_index += 1
+        # self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
+        # self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
+        # resize_pad_layer_index += 1
+        # total_index += 1
 
     def forward(self, x, return_intermediate=True):
         # ======
@@ -255,7 +257,7 @@ if __name__ == "__main__":
     os.makedirs(ENCODER_CONFIG["save_path"], exist_ok=True)
 
     path = ENCODER_CONFIG["image_path"]
-    I0 = load_image(path, size=160)
+    I0 = load_image(path, cut=(288, 288), size=(288, 288))
     E0 = np.sqrt(I0)
     E0 = torch.from_numpy(E0).to(device).type(torch.complex64)
     E0 = E0.unsqueeze(0).unsqueeze(0)
