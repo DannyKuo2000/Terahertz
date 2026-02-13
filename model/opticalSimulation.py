@@ -48,7 +48,7 @@ class SourceLayer(nn.Module):
         self.aspect_ratio = aspect_ratio
 
         # Resize/pad layer
-        self.resize_pad = ResizePadLayer(resize_size_source, new_size_source)
+        self.resize_pad = CropResizeDisplacePadLayer(resize_size_source, new_size_source)
 
     def forward(self, x):
         device = x.device  # ✅ 確保所有 tensor 都跟 x 在同一裝置上
@@ -108,15 +108,17 @@ class SourceLayer(nn.Module):
             src_resized = self.resize_pad(src)
             return x * src_resized.to(device=device, dtype=x.dtype)
 
-class ResizePadLayer(nn.Module):
-    def __init__(self, resize_size=None, pad_size=None, mode='bilinear'):
+class CropResizeDisplacePadLayer(nn.Module):
+    def __init__(self, crop_size=None, resize_size=None, displace=None, pad_size=None, mode='bilinear'):
         """
         resize_size: tuple (H_resize, W_resize) or None，先 resize 到此大小
         new_size: tuple (H_new, W_new) or None，最後強制調整成這個大小（padding 或裁切）
         mode: resize interpolation mode ('bilinear', 'nearest', etc.)
         """
         super().__init__()
+        self.crop_size = crop_size
         self.resize_size = resize_size
+        self.displace = displace
         self.pad_size = pad_size
         self.mode = mode
 
@@ -125,33 +127,52 @@ class ResizePadLayer(nn.Module):
         x: tensor (B, C, H, W)，可以是實數或複數
         """
         B, C, H, W = x.shape
+        # -------------------------
+        # Crop
+        # ------------------------- 
+        if self.crop_size is not None: #and (H != self.crop_size[0] or W != self.crop_size[1]):
+            cur_H, cur_W = x.shape[-2:]
+            target_H, target_W = self.crop_size
+            start_h = (cur_H - target_H) // 2 if cur_H > target_H else 0
+            start_w = (cur_W - target_W) // 2 if cur_W > target_W else 0
+            
+            if torch.is_complex(x):
+                real = x.real[..., start_h:start_h + target_H, start_w:start_w + target_W]
+                imag = x.imag[..., start_h:start_h + target_H, start_w:start_w + target_W]
+                x = torch.complex(real, imag)
+            else:
+                x = x[..., start_h:start_h + target_H, start_w:start_w + target_W]
+            
+            print(x.shape)
 
         # -------------------------
-        # Step 1: Resize
+        # Resize
         # -------------------------
-        if self.resize_size is not None and (H != self.resize_size[0] or W != self.resize_size[1]):
+        if self.resize_size is not None: #and (H != self.resize_size[0] or W != self.resize_size[1]):
             if torch.is_complex(x):
                 real = F.interpolate(x.real, size=self.resize_size, mode=self.mode, align_corners=False)
                 imag = F.interpolate(x.imag, size=self.resize_size, mode=self.mode, align_corners=False)
                 x = torch.complex(real, imag)
             else:
                 x = F.interpolate(x, size=self.resize_size, mode=self.mode, align_corners=False)
-
+            print(x.shape)
         # -------------------------
-        # Step 2: Padding / Cropping 到 pad_size
+        # Displacement / Padding or Cropping 到 pad_size
         # -------------------------
-        if self.pad_size is not None:
-            H_cur, W_cur = x.shape[-2:]
-            target_h, target_w = self.pad_size
+        if self.pad_size is not None or self.displace is not None:
+            cur_H, cur_W = x.shape[-2:]  # 目前 HW
+            target_H, target_W = self.pad_size  # 目標 HW
 
-            pad_h = target_h - H_cur
-            pad_w = target_w - W_cur
 
+            pad_h = target_H - cur_H
+            pad_w = target_W - cur_W
+
+            # 往下往右為正
             if pad_h >= 0 and pad_w >= 0:
                 # zero padding
-                pad_top = pad_h // 2
+                pad_top = pad_h // 2 + self.displace[0]
                 pad_bottom = pad_h - pad_top
-                pad_left = pad_w // 2
+                pad_left = pad_w // 2 + self.displace[1]
                 pad_right = pad_w - pad_left
                 if torch.is_complex(x):
                     real = F.pad(x.real, (pad_left, pad_right, pad_top, pad_bottom))
@@ -161,10 +182,11 @@ class ResizePadLayer(nn.Module):
                     x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom))
             else:
                 # 中心裁切
-                start_h = (H_cur - target_h) // 2 if H_cur > target_h else 0
-                start_w = (W_cur - target_w) // 2 if W_cur > target_w else 0
-                x = x[..., start_h:start_h + target_h, start_w:start_w + target_w]
-
+                start_h = (cur_H - target_H) // 2 if cur_H > target_H else 0
+                start_w = (cur_W - target_W) // 2 if cur_W > target_W else 0
+                x = x[..., start_h:start_h + target_H, start_w:start_w + target_W]
+            print(x.shape)
+        
         return x
 
 # ====== Air Diffraction Calculation ======
@@ -195,6 +217,7 @@ class DiffractiveLayer(nn.Module):
         self.mask_evanescent = mask_evanescent  # 是否遮掉 evanescent
         self.reverse_z = reverse_z  # 是否反向傳播 (-z)
 
+        print(num_size)
         # ==============================================
         # Step 1. 空間頻率軸
         # ==============================================
@@ -254,6 +277,8 @@ class DiffractiveLayer(nn.Module):
 
         # Step B. 傅立葉域傳播
         F = torch.fft.fftshift(torch.fft.fft2(E))
+        print(F.size())
+        print(self.H.size())
         propagated = torch.fft.ifft2(torch.fft.ifftshift(F * self.H))
 
         # Step C. 還原原始大小
@@ -669,7 +694,7 @@ class RadialAttenuationLayer(nn.Module):
         return E * attenuation
 
 class SensorLayer(nn.Module):
-    def __init__(self, crop_size=128, bin_size=1, flip=False):
+    def __init__(self, crop_size=(288, 384), displacement=(0, 0), bin_size=1, flip=False):
         """
         crop_size: 裁切大小 (pixels)
         bin_size: 像素合併 (模擬binning)
@@ -677,6 +702,7 @@ class SensorLayer(nn.Module):
         """
         super().__init__()
         self.crop_size = crop_size
+        self.displacement = displacement
         self.bin_size = bin_size
         self.flip = flip
 
@@ -686,11 +712,13 @@ class SensorLayer(nn.Module):
         回傳裁切/合併後的場 (crop_size x crop_size)
         """
         B, C, H, W = E.shape
-        ch = self.crop_size // 2
+        hh, hw = self.crop_size // 2
         center_h, center_w = H // 2, W // 2
 
-        # --- Step 1: 裁切中央區域 ---
-        E_crop = E[..., center_h - ch:center_h + ch, center_w - ch:center_w + ch]
+        disp_h, disp_w = self.transition
+
+        # --- Step 1: 裁切區域 ---
+        E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h, center_w - hw + disp_w:center_w + hw + disp_w]
 
         # --- Step 2: 像素 binning (平均合併區塊) ---
         if self.bin_size > 1:
@@ -892,7 +920,7 @@ class ONN(nn.Module):
         diffractive_layer_index = 1
         material_layer_index = 1
         
-        self.layers.append(ResizePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
+        self.layers.append(CropResizeDisplacePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
         self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1
@@ -902,7 +930,7 @@ class ONN(nn.Module):
         self.layer_names.append(f"{total_index}_SourceLayer")
         total_index += 1
 
-        self.layers.append(ResizePadLayer(resize_size=resize_size, pad_size=pad_size))
+        self.layers.append(CropResizeDisplacePadLayer(resize_size=resize_size, pad_size=pad_size))
         self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1

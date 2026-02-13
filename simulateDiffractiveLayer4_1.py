@@ -12,7 +12,7 @@ import torchvision.utils as vutils
 import os
 from PIL import Image
 from model.opticalSimulation import ResizePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
-from simulateDiffractiveLayer4_config import ENCODER_CONFIG
+from simulateDiffractiveLayer4_1_config import ENCODER_CONFIG
 
 # ====== Image Loader ======
 def load_image(path, cut=None, size=None):
@@ -145,38 +145,38 @@ class ONN(nn.Module):
         z_values_index = 0
         
         # ==========================
-        self.layers.append(ResizePadLayer(resize_size=(288, 384), pad_size=(2048, 2048)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
-        total_index += 1
-
-        self.layers.append(
-                DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
-        )
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-        z_values_index += 1
-        diffractive_layer_index += 1
-        total_index += 1
-        # =============================
-        # self.layers.append(ResizePadLayer(resize_size=(1143, 1143), pad_size=(2048, 2048)))
+        # self.layers.append(ResizePadLayer(resize_size=(288, 384), pad_size=(2048, 2048)))
         # self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         # resize_pad_layer_index += 1
-        # total_index += 1
-
-        # self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-        #                                center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
-        # self.layer_names.append(f"{total_index}_SourceLayer")
         # total_index += 1
 
         # self.layers.append(
         #         DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
         #                          pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
-        #     )
+        # )
         # self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
         # z_values_index += 1
         # diffractive_layer_index += 1
         # total_index += 1
+        # =============================
+        self.layers.append(ResizePadLayer(resize_size=(1143, 1143), pad_size=(2048, 2048)))
+        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
+        resize_pad_layer_index += 1
+        total_index += 1
+
+        self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
+                                       center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+        self.layer_names.append(f"{total_index}_SourceLayer")
+        total_index += 1
+
+        self.layers.append(
+                DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
+                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+            )
+        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
+        z_values_index += 1
+        diffractive_layer_index += 1
+        total_index += 1
         # ===============================
 
         # 每一層使用不同的 z (如果超出長度，就循環使用)

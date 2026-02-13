@@ -5,19 +5,17 @@
 # ONN size: 0.00075 (m)
 # simulation pixel size: 0.00075/4 (m) = 0.0001875 (m) (每個ONN element 用4*4的模擬去跑)
 # image length = 0.03 (m) => 0.03/0.0001875 = 160 pixels
-
-
 ENCODER_CONFIG = {
-    # "image_path": "data/GroundTruth-800-v1/083.png",
-    # "save_path": "results/terahertz_group_260106",
+    "image_path": "data/GroundTruth-800-v1/083.png",
+    "save_path": "results/sim2real_1cm_Source",
     # "image_path": "other_data/NVLab251224_fixed/camera_34.0.bmp",
     # "save_path": "results/NVLab251224_simulation",
-    "image_path": "other_data/1cm_new.bmp",
-    "save_path": "other_data/1cm_source_diffractive",
+    # "image_path": "other_data/1cm_new.bmp",
+    # "save_path": "other_data/1cm_source_diffractive",
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
-    "use_input": False,  # 是否使用自訂source
-    "input": "results/terahertz_group_251230/2_DiffractiveLayer1_abs.png",  # source
+    "use_input": True,  # 是否使用自訂source
+    "input": "other_data/1cm_source_diffractive/2_DiffractiveLayer1_abs.png",  # source
     "mode_source": "white",  # 不使用自訂source的話，要使用"white" or "gaussian"
     "size_source": (2048, 2048),  # 想要製作的gaussian beam大小
     "sigma": 0.3,  # sigma of gaussian
@@ -50,7 +48,7 @@ ENCODER_CONFIG = {
     "frequency": 0.2004e12,      # THz頻率
     #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
-    "z": [0.12],
+    "z": [0.7],
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,
     "window": "hann",
