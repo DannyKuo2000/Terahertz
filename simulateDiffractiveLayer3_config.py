@@ -36,7 +36,7 @@ ENCODER_CONFIG = {
     "num_size": 128*4,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
     #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
-    #"z": [0.142, 0.041],        # 層間距離 (m)
+    #"z": [0.142, 0.041],        # 層間距離 (m) dataset distance
     "z": [0.15, 0.045],
     "refractive_index": 1,  # 空氣折射率或介質折射率
     "pad_factor": 1,

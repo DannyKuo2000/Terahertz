@@ -1,6 +1,12 @@
+import os
 import numpy as np
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
+from skimage.metrics import structural_similarity as ssim
+from PIL import Image
+from scipy.ndimage import zoom
+
 
 def load_intensity_image(path):
     img = imageio.imread(path)
@@ -197,6 +203,15 @@ def angular_spectrum_propagate(U, wavelength, dx, z, n=1.0, pad_factor=1, mask_e
 
 #     return U_prop
 
+def upscale_intensity(img, scale_factor=2, order=3):
+    """
+    img: 2D numpy array
+    scale_factor: 放大倍率 (例如 2, 4)
+    order: interpolation order
+           1 = bilinear
+           3 = bicubic (推薦)
+    """
+    return zoom(img, zoom=scale_factor, order=order)
 
 def multi_plane_gs(
     Img_list, z_list, wavelength, dx,
@@ -225,6 +240,37 @@ def multi_plane_gs(
 
     U = amp[0] * np.exp(1j * phase0)
 
+    # for it in range(n_iter):
+
+    #     # -------- forward --------
+    #     for i in range(N - 1):
+    #         dz = z_list[i + 1] - z_list[i]
+    #         U = angular_spectrum_propagate(U, wavelength, dx, dz)
+
+    #         # === IMPROVEMENT 2: apply pupil (PSF) ===
+    #         if NA is not None:
+    #             U = apply_pupil(U, wavelength, dx, NA)
+
+    #         U = amp[i + 1] * np.exp(1j * np.angle(U))
+
+    #     # -------- backward --------
+    #     for i in range(N - 1, 0, -1):
+    #         dz = z_list[i - 1] - z_list[i]
+    #         U = angular_spectrum_propagate(U, wavelength, dx, dz)
+
+    #         if NA is not None:
+    #             U = apply_pupil(U, wavelength, dx, NA)
+
+    #         U = amp[i - 1] * np.exp(1j * np.angle(U))
+
+    #     # === IMPROVEMENT 3: phase smoothing ===
+    #     if it % smooth_every == 0:
+    #         phase = np.angle(U)
+    #         phase = lowpass_filter(phase, phase_lp_sigma).real
+    #         U = np.abs(U) * np.exp(1j * phase)
+
+    #     if it % 10 == 0:
+    #         print(f"Iteration {it}/{n_iter}")
     for it in range(n_iter):
 
         # -------- forward --------
@@ -232,11 +278,19 @@ def multi_plane_gs(
             dz = z_list[i + 1] - z_list[i]
             U = angular_spectrum_propagate(U, wavelength, dx, dz)
 
-            # === IMPROVEMENT 2: apply pupil (PSF) ===
             if NA is not None:
                 U = apply_pupil(U, wavelength, dx, NA)
 
             U = amp[i + 1] * np.exp(1j * np.angle(U))
+
+            # === 隨機層濾波 ===
+            if np.random.rand() < 0.2:   # 機率濾波
+                phase = np.angle(U)
+                phase = lowpass_filter(phase, phase_lp_sigma).real
+                # phase = np.angle(
+                #     gaussian_filter(np.cos(phase), sigma=phase_lp_sigma) + 1j * gaussian_filter(np.sin(phase), sigma=phase_lp_sigma)
+                # )
+                U = np.abs(U) * np.exp(1j * phase)
 
         # -------- backward --------
         for i in range(N - 1, 0, -1):
@@ -248,131 +302,216 @@ def multi_plane_gs(
 
             U = amp[i - 1] * np.exp(1j * np.angle(U))
 
-        # # === IMPROVEMENT 3: phase smoothing ===
-        # if it % smooth_every == 0:
-        #     phase = np.angle(U)
-        #     phase = lowpass_filter(phase, phase_lp_sigma).real
-        #     U = np.abs(U) * np.exp(1j * phase)
-
+            # === 隨機層濾波 ===
+            if np.random.rand() < 0.2:   # 機率濾波
+                phase = np.angle(U)
+                phase = lowpass_filter(phase, phase_lp_sigma).real
+                # phase = np.angle(
+                #     gaussian_filter(np.cos(phase), sigma=phase_lp_sigma) + 1j * gaussian_filter(np.sin(phase), sigma=phase_lp_sigma)
+                # )
+                U = np.abs(U) * np.exp(1j * phase)
         if it % 10 == 0:
             print(f"Iteration {it}/{n_iter}")
-
     return U
 
 
 if __name__ == "__main__":
-    wavelength = 2.998e8 / 0.2004e12   # THz
-    dx = 35e-6                         # pixel size (m)
-
     # 量測距離（一定要對應圖片順序）
-    z_list = [0.341, 0.342, 0.343, 0.344, 0.345]
+    z_list = [
+        0.340, 
+        0.341, 
+        0.342, 
+        0.343, 
+        0.344, 
+        # 0.345, 
+        # 0.346, 
+        # 0.347, 
+        # 0.348, 
+        # 0.349, 
+        # 0.350,
+    ]
 
     # 圖片路徑
     img_paths = [
-        "other_data/NVLab251224_fixed/camera_34.1.bmp",
-        "other_data/NVLab251224_fixed/camera_34.2.bmp",
-        "other_data/NVLab251224_fixed/camera_34.3.bmp",
-        "other_data/NVLab251224_fixed/camera_34.4.bmp",
-        "other_data/NVLab251224_fixed/camera_34.5.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.0cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.1cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.2cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.3cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.4cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.5cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.6cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.7cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.8cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.9cm_1.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_35.0cm_1.bmp",
     ]
+    img_paths = [
+        "other_data/NVLab260130_fixed/0.2THz_34.0cm_2.bmp",
+        "other_data/NVLab260130_fixed/0.2THz_34.1cm_2.bmp",
+        "other_data/NVLab260130_fixed/0.2THz_34.2cm_2.bmp",
+        "other_data/NVLab260130_fixed/0.2THz_34.3cm_2.bmp",
+        "other_data/NVLab260130_fixed/0.2THz_34.4cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.5cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.6cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.7cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.8cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.9cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_35.0cm_2.bmp",
+    ]
+    # img_paths = [
+    #     "other_data/NVLab260130_fixed/0.12THz_34.0cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.1cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.2cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.3cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.4cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.5cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.6cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.7cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.8cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_34.9cm_1.bmp",
+    #     "other_data/NVLab260130_fixed/0.12THz_35.0cm_1.bmp",
+    # ]
 
-    crop_size = 256 # 原圖384*288 裁成256*256能避開不穩的邊界
+    # === 設定輸出資料夾 ===
+    output_dir = "other_data/NVLab260130_results"
+    os.makedirs(output_dir, exist_ok=True)
 
+    # === 參數設定 ===
+    wavelength = 2.998e8 / 0.2e12   # THz
+    dx = 35e-6                         # pixel size (m)
+    scale = 2
+    crop_size = 256  # 原圖384*288裁成256*256避免不穩定邊界
+    n_iter = 200
+    phase_lp_sigma = 0.05
+    # phase_lp_sigma = 0.00001
+    # phase_lp_sigma = 0.12
+
+    # === 讀取圖片並裁切 ===
     Img_list = []
     for p in img_paths:
-        Img = load_intensity_image(p)
-        Img = center_crop(Img, crop_size)
+        Img = load_intensity_image(p)           # 你自己定義的讀圖函數
+        Img = center_crop(Img, crop_size)       # 你自己定義的裁切函數
+        if scale is not None:
+            Img = upscale_intensity(Img, scale_factor=scale)
         Img_list.append(Img)
 
+    # === 多平面 GS 重建 ===
     U_recon = multi_plane_gs(
         Img_list,
         z_list,
         wavelength,
-        dx,
-        n_iter=150,
+        dx/scale,
+        n_iter=n_iter,
         init_phase="random",
-        phase_lp_sigma=0.08,   # 建議 0.05 ~ 0.12
+        phase_lp_sigma=phase_lp_sigma,
         smooth_every=1,
-        NA=0.5               # === 相機 NA，沒概念就 0.1~0.2 試 ===
+        NA=None
     )
 
+    # === 提取幅度與相位 ===
     phase = np.angle(U_recon)
     amplitude = np.abs(U_recon)
-    I_recon = np.abs(U_recon)**2
+    I_recon = amplitude**2
 
-    # 用重建場預測中間平面
-    U_test = angular_spectrum_propagate(U_recon, wavelength, dx, z_list[3] - z_list[0])
+    # === 預測目標平面 ===
+    U_test = angular_spectrum_propagate(U_recon, wavelength, dx, z_list[4] - z_list[0])
     I_test = np.abs(U_test)**2
 
+    # === 零相位推估 ===
     U_zero = np.sqrt(Img_list[0]) * np.exp(1j * 0)
-    U_test2 = angular_spectrum_propagate(U_zero, wavelength, dx, z_list[3] - z_list[0])
+    U_test2 = angular_spectrum_propagate(U_zero, wavelength, dx, z_list[4] - z_list[0])
     I_test2 = np.abs(U_test2)**2
 
-    # 真實量測的中間平面
-    I_meas = Img_list[3]
+    # === 真實量測的中間平面 ===
+    I_meas = Img_list[4]
     I_start = Img_list[0]
 
-    # 正規化（避免 scale 不一致誤導）
+    # === 正規化 (避免亮度 scale 不一致) ===
     I_test_n = I_test / (I_test.max() + 1e-12)
-    I_test2_n = I_test / (I_test2.max() + 1e-12)
+    I_test2_n = I_test2 / (I_test2.max() + 1e-12)
     I_meas_n = I_meas / (I_meas.max() + 1e-12)
     I_start_n = I_start / (I_start.max() + 1e-12)
-    # 差異圖
+
+    # === 差異圖 ===
     diff = I_test_n - I_meas_n
     diff2 = I_test2_n - I_meas_n
     diff_1_2 = I_test_n - I_test2_n
-    # 誤差指標
+
+    # === 誤差指標 ===
     mse = np.mean(diff**2)
     rel_err = np.linalg.norm(diff) / np.linalg.norm(I_meas_n)
     mse2 = np.mean(diff2**2)
     rel_err2 = np.linalg.norm(diff2) / np.linalg.norm(I_meas_n)
 
-    print(f"MSE: {mse:.3e}")
-    print(f"Relative error: {rel_err:.3e}")
-    print(f"MSE_2: {mse2:.3e}")
-    print(f"Relative error_2: {rel_err2:.3e}")
+    # === SSIM 指標 ===
+    ssim_1 = ssim(I_meas_n, I_test_n, data_range=1.0)
+    ssim_2 = ssim(I_meas_n, I_test2_n, data_range=1.0)
+    ssim_3 = ssim(I_test2_n, I_test_n, data_range=1.0)
 
-    # 視覺化
+    print(f"MSE: {mse:.3e}, Relative error: {rel_err:.3e}, SSIM: {ssim_1:.4f}")
+    print(f"MSE_2: {mse2:.3e}, Relative error_2: {rel_err2:.3e}, SSIM_2: {ssim_2:.4f}")
+    print(f"SSIM (zero phase vs reconstructed): {ssim_3:.4f}")
+
+    # === 可逆存檔 npz ===
+    np.savez(f"{output_dir}/reconstruction_results.npz",
+            U_recon=U_recon,
+            phase=phase,
+            amplitude=amplitude,
+            I_test=I_test,
+            I_test2=I_test2,
+            I_meas=I_meas,
+            I_start=I_start,
+            diff=diff,
+            diff2=diff2,
+            diff_1_2=diff_1_2,
+            mse=mse,
+            rel_err=rel_err,
+            mse2=mse2,
+            rel_err2=rel_err2,
+            ssim_1=ssim_1,
+            ssim_2=ssim_2,
+            ssim_3=ssim_3
+    )
+    # === 儲存 metric 到 txt ===
+    with open(f"{output_dir}/reconstruction_metrics.txt", "w") as f:
+        f.write("=== Reconstruction Metrics ===\n")
+        f.write(f"MSE (measured vs predicted): {mse:.6e}\n")
+        f.write(f"Relative error: {rel_err:.6e}\n")
+        f.write(f"SSIM (measured vs predicted): {ssim_1:.4f}\n\n")
+        
+        f.write(f"MSE_2 (measured vs zero phase): {mse2:.6e}\n")
+        f.write(f"Relative error_2: {rel_err2:.6e}\n")
+        f.write(f"SSIM_2 (measured vs zero phase): {ssim_2:.4f}\n\n")
+        
+        f.write(f"SSIM_3 (zero phase vs reconstructed): {ssim_3:.4f}\n")
+
+    # === PNG 存檔 (視覺化用) ===
+    def save_png(img, title):
+        img_norm = ((img - img.min()) / (img.max() - img.min()) * 255).astype(np.uint8)
+        Image.fromarray(img_norm).save(f"{output_dir}/{title}.png")
+
+    images = [
+        (I_meas, "Measured_intensity"),
+        (I_test, "Predicted_intensity"),
+        (diff, "Difference_measured_vs_predicted"),
+        (phase, "Reconstructed_phase"),
+        (I_start, "Start_image_intensity"),
+        (I_test2, "Zero_phase_intensity"),
+        (diff2, "Difference_measured_vs_zero_phase"),
+        (diff_1_2, "Difference_zero_vs_reconstructed")
+    ]
+
+    for img_array, title in images:
+        save_png(img_array, title)
+
+    # === 視覺化 ===
     fig, axs = plt.subplots(2, 4, figsize=(16, 8))
-    axs = axs.flatten()   # ← 關鍵修正
+    axs = axs.flatten()
 
-    axs[0].imshow(I_meas, cmap="gray")
-    axs[0].set_title("Measured intensity")
-    axs[0].axis("off")
-
-    axs[1].imshow(I_test, cmap="gray")
-    axs[1].set_title("Predicted intensity")
-    axs[1].axis("off")
-
-    axs[2].imshow(diff, cmap="bwr")
-    axs[2].set_title("Difference between measured & reconstructed")
-    axs[2].axis("off")
-
-    axs[3].imshow(phase, cmap="gray")
-    axs[3].set_title("Reconstructed phase")
-    axs[3].axis("off")
-
-    # im = axs[3].imshow(np.log(I_test_n + 1e-6), cmap="gray")
-    # axs[3].set_title("Predicted (log scale)")
-    # axs[3].axis("off")
-
-    axs[4].imshow(I_start, cmap="gray")
-    axs[4].set_title("Start image intensity")
-    axs[4].axis("off")
-
-    axs[5].imshow(I_test2, cmap="gray")
-    axs[5].set_title("Zero phase intensity")
-    axs[5].axis("off")
-
-    axs[6].imshow(diff2, cmap="bwr")
-    axs[6].set_title("Difference between measured & zero phase")
-    axs[6].axis("off")
-
-    axs[7].imshow(diff_1_2, cmap="bwr")
-    axs[7].set_title("Difference between zero phase & reconstructed")
-    axs[7].axis("off")
-    
-
+    for ax, (img_array, title) in zip(axs, images):
+        ax.imshow(img_array, cmap="gray")
+        ax.set_title(title)
+        ax.axis("off")
 
     plt.tight_layout()
     plt.show()

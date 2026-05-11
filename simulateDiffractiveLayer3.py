@@ -21,7 +21,7 @@ def load_image(path, size=160):
     img = Image.open(path).convert("L")
     print(f"Original size {img.size}")
     ratio = size / min(img.size[0], img.size[1])
-    img = img.resize((int(img.size[0]*ratio), int(img.size[1]*ratio)), Image.BICUBIC)
+    img = img.resize((int(img.size[0]*ratio), int(img.size [1]*ratio)), Image.BICUBIC)
     print(f"Resized size {img.size}")
     img_processed = img.crop([img.size[0]//2-size//2, img.size[1]//2-size//2, img.size[0]//2+(size-size//2), img.size[1]//2+(size-size//2)])
     print(f"Processed size {img_processed.size}")

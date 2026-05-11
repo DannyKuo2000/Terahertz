@@ -14,6 +14,7 @@ ONN_modelVerification.py: 用來測試ONN的檔案1
 ONN_modelVerification2.py: 用來測試ONN的檔案2
 phasorIntegration.py: 用來計算phasor integration的誤差比例
 raw2bmp.py: 將相機拍攝的raw檔轉成bmp可視
+repair_commands.txt: BadPixelReapir.py所需要的文字檔
 
 
 

@@ -1,7 +1,7 @@
 @echo off
 REM ======= Parameters Setting =======
-set INPUT_DIR=..\sample_data\EMNIST\spliced_PNG
-set OUTPUT_DIR=..\sample_data\EMNIST\spliced_DXF
+set INPUT_DIR=..\..\data\EMNIST_sample\spliced_PNG_for_testing
+set OUTPUT_DIR=..\..\data\EMNIST_sample\spliced_DXF_for_testing
 set MAX_IMAGES=10
 
 REM ======= Make Output File =======
@@ -13,7 +13,6 @@ REM ======= Initialize Counter =======
 setlocal enabledelayedexpansion
 set COUNT=0
 
-REM >nul 2>&1
 
 REM ======= Process PNG Files =======
 for %%f in (%INPUT_DIR%\*.png) do (

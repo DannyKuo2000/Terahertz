@@ -205,7 +205,7 @@ class CropResizeDisplacePadLayer(nn.Module):
 """
 class DiffractiveLayer(nn.Module):
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
-                 pad_factor=1, window=None, mask_evanescent=False, reverse_z=False):
+                pad_factor=1, window=None, mask_evanescent=False, reverse_z=False):
         super().__init__()
         self.dx = dx  # resolution (m)
         self.size = num_size  # number of optical neurons in one dimension
@@ -295,8 +295,8 @@ class DiffractiveLayer(nn.Module):
 
 '''class DiffractiveLayer(nn.Module): 之前有加入其他功能的版本，需要額外修改
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
-                 pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
-                 alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
+                pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
+                alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
         """
         衰減項說明:
         1. alpha_global: 全域衰減係數 (m^-1)，傳播距離 z 時因子為 exp(-alpha_global * z)
@@ -504,7 +504,7 @@ class DiffractiveLayer(nn.Module):
             E_new = torch.nn.functional.pad(E_crop, (pad_left, pad_right, pad_top, pad_bottom))
 
         # 確保尺寸正確
-        assert E_new.shape[-2] == H_target and E_new.shape[-1] == W_target, \
+        assert E_new.shape[-2] == H_target and E_new.shape[-1] == W_target, 
             f"pad failed: got {E_new.shape[-2:]} expected {(H_target, W_target)}"
 
         # 保持 device 與原始 E 一致
@@ -512,9 +512,9 @@ class DiffractiveLayer(nn.Module):
 
 class LensLayer(nn.Module):
     def __init__(self, focal_length, dx, num_size, wavelength,
-                 pupil_type=None, pupil_radius=None, pupil_width=None,
-                 phase_model="exact", mode="forward", outside="one",
-                 frame=False, frame_inner=0.02375, frame_outer=0.0254):
+                pupil_type=None, pupil_radius=None, pupil_width=None,
+                phase_model="exact", mode="forward", outside="one",
+                frame=False, frame_inner=0.02375, frame_outer=0.0254):
         super().__init__()
         self.f = float(focal_length)
         self.dx = float(dx)
@@ -926,7 +926,7 @@ class ONN(nn.Module):
         total_index += 1
 
         self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                                       center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+                                    center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
         self.layer_names.append(f"{total_index}_SourceLayer")
         total_index += 1
 
@@ -940,7 +940,7 @@ class ONN(nn.Module):
         for z_values_index in range(num_layers):
             self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+                                pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
             )
             self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
             diffractive_layer_index += 1

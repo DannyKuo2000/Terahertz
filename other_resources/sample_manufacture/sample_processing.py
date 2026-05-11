@@ -41,10 +41,12 @@ def ubyte2PNG(input_folder, output_folder):
         image_data = np.frombuffer(f.read(), dtype=np.uint8)
         images = image_data.reshape((num_images, rows, cols))
 
+    filename_width = max(1, len(str(num_images)))
+
     # ======= 轉成 PNG 圖檔（加進度條）=======
     for i, img_array in enumerate(tqdm(images, desc="轉換中", unit="張")):
         img = Image.fromarray(img_array, mode='L')  # 'L' = 8-bit 灰階
-        img.save(os.path.join(output_folder, f'{i:05}.png'))
+        img.save(os.path.join(output_folder, f'{i:0{filename_width}d}.png'))
 
     print(f"✅ 共儲存 {num_images} 張圖到：{output_folder}")
 
@@ -116,6 +118,7 @@ def PNG_splice(input_folder, output_folder):
     ])
 
     # ===== 分組處理每25張圖片，加入 tqdm 進度條 =====
+    filename_width = max(1, len(str(len(image_files))))
     num_groups = (len(image_files) + images_per_group - 1) // images_per_group
     for group_idx in tqdm(range(num_groups), desc="Processing groups"):
         group = image_files[group_idx * images_per_group : (group_idx + 1) * images_per_group]
@@ -141,13 +144,18 @@ def PNG_splice(input_folder, output_folder):
             collage.paste(img, (x, y))
 
         # 儲存拼接圖
-        output_path = os.path.join(output_folder, f"group_{group_idx*images_per_group+1}~{(group_idx+1)*images_per_group}.png")
+        start_index = group_idx * images_per_group + 1
+        end_index = start_index + len(group) - 1
+        output_path = os.path.join(
+            output_folder,
+            f"group_{start_index:0{filename_width}d}~{end_index:0{filename_width}d}.png"
+        )
         collage.save(output_path)
 
     print("✅ 完成拼接與儲存！")
 
 if __name__ == "__main__":
-    #ubyte2PNG(ubyte_folder, pixels_28_folder)
-    #PNG_connectedBlack(pixels_28_folder, pixels_28_connected_folder)
+    ubyte2PNG(ubyte_folder, pixels_28_folder)
+    PNG_connectedBlack(pixels_28_folder, pixels_28_connected_folder)
     PNG_resize(pixels_28_connected_folder, pixels_400_folder)
     PNG_splice(pixels_400_folder, spliced_folder)
