@@ -1,5 +1,5 @@
 from .opticalSimulation import SourceLayer
-from .opticalSimulation import ResizePadLayer
+from .opticalSimulation import CropResizeDisplacePadLayer
 from .opticalSimulation import DiffractiveLayer
 from .opticalSimulation import LensLayer
 from .opticalSimulation import SensorLayer

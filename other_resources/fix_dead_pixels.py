@@ -5,19 +5,20 @@ fix_dead_pixels.py (學長寫的)
 依據提供的壞點座標，使用 8 鄰域平均修復；若鄰居也壞，會自動擴半徑找有效像素。
 
 用法範例：
-  # 單張影像 + 直接在命令列指定壞點 (y,x)
-  python fix_dead_pixels.py input.png --coords 140,188 144,190 --out repaired.png
+# 單張影像 + 直接在命令列指定壞點 (y,x)
+    python fix_dead_pixels.py input.png --coords 140,188 144,190 --out repaired.png
 
-  # 單張影像 + 從檔案讀壞點 (每行: y,x)
-  python fix_dead_pixels.py input.png --coord-file bad_points.csv --out repaired.png
+# 單張影像 + 從檔案讀壞點 (每行: y,x)
+    python fix_dead_pixels.py input.png --coord-file bad_points.csv --out repaired.png
 
-  # 批次資料夾（只抓 *.png），座標同一份
-  python fix_dead_pixels.py ./imgs --glob "*.png" --coord-file bad_points.txt --outdir out
+# 批次資料夾（只抓 *.png），座標同一份
+    python fix_dead_pixels.py ./imgs --glob "*.png" --coord-file bad_points.txt --outdir out
+    python other_resources\fix_dead_pixels.py other_data\NVLab260519_averaged --glob "*.bmp" --coord-file other_resources\bad_points.txt --outdir other_data\NVLab260519_fixed
 
 檔案格式說明：
-  coord-file：純文字或 CSV，每行一組「y,x」，例如：
-      142,187
-      143,189
+    coord-file：純文字或 CSV，每行一組「y,x」，例如：
+    142,187
+    143,189
 """
 
 import argparse

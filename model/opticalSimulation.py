@@ -23,22 +23,25 @@ Experiments Relative parameters:
 器材訊息:
 透鏡架2: Newport M-LH-2A: https://www.newport.com/p/M-LH-2A
 透鏡2: 1.55 µm BCX Lens: 針對 1.55 µm 波長最佳化設計的雙凸透鏡
-
-器材位置:
-sample: (22.1+19.9)/2+0.2 = 21.2
-len2: (36.5+34.3)/2 = 35.4 
-camera: 39.5
 """
 class SourceLayer(nn.Module):
+    """
+    模擬 source 不均勻時使用的 layer
+    """
     def __init__(self, use_input=True, input=None, mode="white", size_source=(128, 128),
-                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
-                 rotation=0.0, aspect_ratio=1.0,
-                 resize_size_source=None, new_size_source=None):
+                sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
+                rotation=0.0, aspect_ratio=1.0,
+                crop_size_source=None, resize_size_source=None, pad_size_source=None,
+                source_is_intensity=True, new_size_source=None):
+        
         super().__init__()
         self.use_input = use_input
         self.input = input
         self.mode = mode
         self.size_source = size_source
+        self.source_is_intensity = source_is_intensity
+        if pad_size_source is None and new_size_source is not None:
+            pad_size_source = new_size_source
 
         # Gaussian beam 參數
         self.sigma = sigma
@@ -48,7 +51,11 @@ class SourceLayer(nn.Module):
         self.aspect_ratio = aspect_ratio
 
         # Resize/pad layer
-        self.resize_pad = CropResizeDisplacePadLayer(resize_size_source, new_size_source)
+        self.resize_pad = CropResizeDisplacePadLayer(
+            crop_size=crop_size_source,
+            resize_size=resize_size_source,
+            pad_size=pad_size_source,
+        )
 
     def forward(self, x):
         device = x.device  # ✅ 確保所有 tensor 都跟 x 在同一裝置上
@@ -61,6 +68,8 @@ class SourceLayer(nn.Module):
             img = Image.open(self.input).convert("L")  # 灰階
             transform = T.ToTensor()
             source_background = transform(img).unsqueeze(0)  # (1, 1, H, W)
+            if self.source_is_intensity:
+                source_background = torch.sqrt(torch.clamp(source_background, min=0.0))
 
 
 
@@ -109,6 +118,9 @@ class SourceLayer(nn.Module):
             return x * src_resized.to(device=device, dtype=x.dtype)
 
 class CropResizeDisplacePadLayer(nn.Module):
+    """
+    用來執行 crop, resize, displace pad 的 layer
+    """
     def __init__(self, crop_size=None, resize_size=None, displace=None, pad_size=None, mode='bilinear'):
         """
         resize_size: tuple (H_resize, W_resize) or None，先 resize 到此大小
@@ -118,7 +130,7 @@ class CropResizeDisplacePadLayer(nn.Module):
         super().__init__()
         self.crop_size = crop_size
         self.resize_size = resize_size
-        self.displace = displace
+        self.displace = displace if displace is not None else (0, 0)
         self.pad_size = pad_size
         self.mode = mode
 
@@ -159,7 +171,7 @@ class CropResizeDisplacePadLayer(nn.Module):
         # -------------------------
         # Displacement / Padding or Cropping 到 pad_size
         # -------------------------
-        if self.pad_size is not None or self.displace is not None:
+        if self.pad_size is not None:
             cur_H, cur_W = x.shape[-2:]  # 目前 HW
             target_H, target_W = self.pad_size  # 目標 HW
 
@@ -204,6 +216,9 @@ class CropResizeDisplacePadLayer(nn.Module):
 
 """
 class DiffractiveLayer(nn.Module):
+    """
+    用 angular spectrum 模擬在空氣中的傳播
+    """
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                 pad_factor=1, window=None, mask_evanescent=False, reverse_z=False):
         super().__init__()
@@ -293,7 +308,10 @@ class DiffractiveLayer(nn.Module):
 
         return propagated
 
-'''class DiffractiveLayer(nn.Module): 之前有加入其他功能的版本，需要額外修改
+'''class DiffractiveLayer(nn.Module): 
+    """
+    增加 attenuation 的 angular spectrum 模擬
+    """
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                 pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
                 alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
@@ -511,6 +529,9 @@ class DiffractiveLayer(nn.Module):
         return E_new.to(E.device)'''
 
 class LensLayer(nn.Module):
+    """
+    模擬 lens 的 layer
+    """
     def __init__(self, focal_length, dx, num_size, wavelength,
                 pupil_type=None, pupil_radius=None, pupil_width=None,
                 phase_model="exact", mode="forward", outside="one",
@@ -654,7 +675,6 @@ class FresnelInterface(nn.Module):
 class RadialAttenuationLayer(nn.Module):
     """
     對複數場 E 做徑向衰減，避免邊緣數值過大。
-    
     參數:
     ----------
     E : np.ndarray 或 torch.Tensor, complex
@@ -694,6 +714,9 @@ class RadialAttenuationLayer(nn.Module):
         return E * attenuation
 
 class SensorLayer(nn.Module):
+    """
+    模擬 sensor 裁切與翻轉的 layer
+    """
     def __init__(self, crop_size=(288, 384), displacement=(0, 0), bin_size=1, flip=False):
         """
         crop_size: 裁切大小 (pixels)
@@ -712,17 +735,17 @@ class SensorLayer(nn.Module):
         回傳裁切/合併後的場 (crop_size x crop_size)
         """
         B, C, H, W = E.shape
-        hh, hw = self.crop_size // 2
+        crop_h, crop_w = self.crop_size
+        hh, hw = crop_h // 2, crop_w // 2
         center_h, center_w = H // 2, W // 2
 
-        disp_h, disp_w = self.transition
+        disp_h, disp_w = self.displacement
 
         # --- Step 1: 裁切區域 ---
         E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h, center_w - hw + disp_w:center_w + hw + disp_w]
 
         # --- Step 2: 像素 binning (平均合併區塊) ---
         if self.bin_size > 1:
-            new_size = self.crop_size // self.bin_size
             # E_crop shape = [..., crop_size, crop_size]
             E_crop = E_crop.unfold(-2, self.bin_size, self.bin_size).unfold(-1, self.bin_size, self.bin_size)
             # shape [..., new_size, bin_size, new_size, bin_size]
@@ -734,7 +757,7 @@ class SensorLayer(nn.Module):
             E_crop = torch.flip(E_crop, dims=[-2, -1])
 
         # --- Step 4: 轉換到Intensity(相機感受到的是能量、熱) ---
-        I_crop = torch.abs(E_crop)
+        I_crop = torch.abs(E_crop) ** 2
         print(torch.min(I_crop))
         print(torch.max(I_crop))
         I_crop = I_crop.to(torch.float32)
@@ -745,6 +768,9 @@ class SensorLayer(nn.Module):
 
 # ====== Sensor Noise Simulation ======
 class SensorNoiseLayer(nn.Module):
+    """
+    簡易的 sensor noise 模擬
+    """
     def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
         """
         config:
@@ -800,6 +826,9 @@ class SensorNoiseLayer(nn.Module):
 
 # ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
+    """
+    ONN layer 模擬
+    """
     def __init__(self, num_size=128, block_size=(1, 1), return_phases=True):
         super().__init__()
         self.block_size = block_size
@@ -835,6 +864,9 @@ class MaterialLayer(nn.Module):
 
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
+    """
+    架好的 ONN 範例
+    """
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
         self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
@@ -981,7 +1013,7 @@ class ONN(nn.Module):
             self.layer_names.append(f"{total_index}_SensorNoiseLayer")
             total_index += 1
         
-        self.layers.append(ResizePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
+        self.layers.append(CropResizeDisplacePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
         self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
         resize_pad_layer_index += 1
         total_index += 1

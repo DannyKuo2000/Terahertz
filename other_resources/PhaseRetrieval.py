@@ -704,7 +704,42 @@ def inverse_softplus(value, eps=1e-12):
     value = max(float(value), eps)
     return math.log(math.exp(value) - 1.0)
 
-def build_learned_monotone_gain_curve(num_knots, initial_input_scale, device):
+def build_radial_sensor_conv_meta(kernel_size, device):
+    if kernel_size % 2 == 0 or kernel_size < 1:
+        raise ValueError("kernel_size must be a positive odd integer.")
+
+    center = kernel_size // 2
+    yy, xx = torch.meshgrid(
+        torch.arange(kernel_size, device=device),
+        torch.arange(kernel_size, device=device),
+        indexing="ij"
+    )
+    radius_sq = (yy - center) ** 2 + (xx - center) ** 2
+    unique_radius_sq, radius_index = torch.unique(radius_sq.reshape(-1), sorted=True, return_inverse=True)
+    radius_index = radius_index.reshape(kernel_size, kernel_size)
+    return {
+        "kernel_size": kernel_size,
+        "unique_radius_sq": unique_radius_sq,
+        "radius_index": radius_index,
+    }
+
+def build_circular_sensor_conv_meta(kernel_size, device):
+    radial_meta = build_radial_sensor_conv_meta(kernel_size, device=device)
+    center = kernel_size // 2
+    yy, xx = torch.meshgrid(
+        torch.arange(kernel_size, device=device),
+        torch.arange(kernel_size, device=device),
+        indexing="ij"
+    )
+    radius = torch.sqrt((yy - center).to(torch.float32) ** 2 + (xx - center).to(torch.float32) ** 2)
+    support_radius = float(center) + 1e-6
+    support_mask = radius <= support_radius
+    return {
+        **radial_meta,
+        "support_mask": support_mask,
+    }
+
+def build_learned_monotone_gain_curve(num_knots, initial_input_scale, device, learn_input_scale=True):
     if num_knots < 2:
         raise ValueError("num_knots must be at least 2 for monotone gain learning.")
 
@@ -720,9 +755,9 @@ def build_learned_monotone_gain_curve(num_knots, initial_input_scale, device):
     gain_log_input_scale = torch.tensor(
         math.log(max(float(initial_input_scale), 1e-6)),
         dtype=torch.float32,
-        device=device,
-        requires_grad=True
+        device=device
     )
+    gain_log_input_scale.requires_grad_(learn_input_scale)
     return gain_increment_param, gain_log_input_scale
 
 def get_learned_monotone_gain_knots_torch(gain_increment_param, gain_log_input_scale, dtype, device, eps=1e-12):
@@ -795,15 +830,150 @@ def apply_inverse_learned_monotone_gain_numpy(I_measured, gain_curve_result):
         right=gain_curve_result["x_knots"][-1]
     )
 
-def make_gain_corrected_title(base_title, dark_current_eff_drift, learned_gain_curve=None):
+def apply_inverse_learned_monotone_gain_torch(I_measured, gain_increment_param, gain_log_input_scale, eps=1e-12):
+    knots_x, knots_y, _ = get_learned_monotone_gain_knots_torch(
+        gain_increment_param,
+        gain_log_input_scale,
+        dtype=I_measured.dtype,
+        device=I_measured.device,
+        eps=eps
+    )
+
+    flat_y = I_measured.reshape(-1)
+    segment_idx = torch.bucketize(flat_y, knots_y[1:-1])
+    segment_idx = torch.clamp(segment_idx, 0, knots_y.numel() - 2)
+
+    y0 = knots_y[segment_idx]
+    y1 = knots_y[segment_idx + 1]
+    x0 = knots_x[segment_idx]
+    x1 = knots_x[segment_idx + 1]
+    t = (flat_y - y0) / (y1 - y0).clamp_min(eps)
+    flat_x = x0 + t * (x1 - x0)
+    return flat_x.reshape_as(I_measured)
+
+def build_sensor_conv_kernel(sensor_conv_kernel_param, sensor_conv_kernel_meta=None, eps=1e-12):
+    if sensor_conv_kernel_meta is not None:
+        radius_index = sensor_conv_kernel_meta["radius_index"].to(device=sensor_conv_kernel_param.device)
+        positive_kernel = F.softplus(sensor_conv_kernel_param) + 1e-6
+        positive_kernel = positive_kernel[radius_index]
+        support_mask = sensor_conv_kernel_meta.get("support_mask")
+        if support_mask is not None:
+            support_mask = support_mask.to(device=sensor_conv_kernel_param.device)
+            positive_kernel = positive_kernel * support_mask.to(dtype=positive_kernel.dtype)
+    else:
+        positive_kernel = F.softplus(sensor_conv_kernel_param) + 1e-6
+    return positive_kernel / positive_kernel.sum().clamp_min(eps)
+
+def build_sensor_conv_kernel_numpy(sensor_conv_kernel_param, sensor_conv_kernel_meta=None, eps=1e-12):
+    with torch.no_grad():
+        kernel = build_sensor_conv_kernel(
+            sensor_conv_kernel_param,
+            sensor_conv_kernel_meta=sensor_conv_kernel_meta,
+            eps=eps
+        )
+    return kernel.detach().cpu().numpy()
+
+def apply_sensor_conv_torch(I_linear, sensor_conv_kernel_param, sensor_conv_kernel_meta=None, eps=1e-12):
+    if sensor_conv_kernel_param is None:
+        return I_linear
+
+    kernel = build_sensor_conv_kernel(
+        sensor_conv_kernel_param,
+        sensor_conv_kernel_meta=sensor_conv_kernel_meta,
+        eps=eps
+    )
+    kernel_h, kernel_w = kernel.shape
+    pad_h = kernel_h // 2
+    pad_w = kernel_w // 2
+    I_padded = F.pad(
+        I_linear[None, None, :, :],
+        (pad_w, pad_w, pad_h, pad_h),
+        mode="reflect"
+    )
+    kernel_4d = kernel[None, None, :, :].to(dtype=I_linear.dtype, device=I_linear.device)
+    return F.conv2d(I_padded, kernel_4d)[0, 0]
+
+def apply_sensor_conv_numpy(I_linear, sensor_conv_kernel):
+    if sensor_conv_kernel is None:
+        return np.asarray(I_linear, dtype=np.float64)
+
+    I_linear = np.asarray(I_linear, dtype=np.float64)
+    sensor_conv_kernel = np.asarray(sensor_conv_kernel, dtype=np.float64)
+    return cv2.filter2D(I_linear, ddepth=-1, kernel=sensor_conv_kernel, borderType=cv2.BORDER_REFLECT)
+
+def apply_inverse_sensor_conv_torch(I_sensor_linear, sensor_conv_kernel_param, sensor_conv_kernel_meta=None, reg=1e-3, eps=1e-12):
+    if sensor_conv_kernel_param is None:
+        return I_sensor_linear
+
+    kernel = build_sensor_conv_kernel(
+        sensor_conv_kernel_param,
+        sensor_conv_kernel_meta=sensor_conv_kernel_meta,
+        eps=eps
+    ).to(
+        dtype=I_sensor_linear.dtype,
+        device=I_sensor_linear.device
+    )
+    ny, nx = I_sensor_linear.shape
+    kernel_padded = torch.zeros((ny, nx), dtype=I_sensor_linear.dtype, device=I_sensor_linear.device)
+    ky, kx = kernel.shape
+    kernel_padded[:ky, :kx] = kernel
+    kernel_padded = torch.fft.ifftshift(kernel_padded)
+    H = torch.fft.fft2(kernel_padded)
+    Y = torch.fft.fft2(I_sensor_linear)
+    H_conj = torch.conj(H)
+    X = Y * H_conj / (torch.abs(H) ** 2 + reg)
+    x = torch.fft.ifft2(X).real
+    return torch.clamp(x, min=0.0)
+
+def apply_inverse_sensor_conv_numpy(I_sensor_linear, sensor_conv_kernel, reg=1e-3):
+    if sensor_conv_kernel is None:
+        return np.asarray(I_sensor_linear, dtype=np.float64)
+
+    I_sensor_linear = np.asarray(I_sensor_linear, dtype=np.float64)
+    sensor_conv_kernel = np.asarray(sensor_conv_kernel, dtype=np.float64)
+    ny, nx = I_sensor_linear.shape
+    kernel_padded = np.zeros((ny, nx), dtype=np.float64)
+    ky, kx = sensor_conv_kernel.shape
+    kernel_padded[:ky, :kx] = sensor_conv_kernel
+    kernel_padded = np.fft.ifftshift(kernel_padded)
+    H = np.fft.fft2(kernel_padded)
+    Y = np.fft.fft2(I_sensor_linear)
+    X = Y * np.conj(H) / (np.abs(H) ** 2 + reg)
+    x = np.fft.ifft2(X).real
+    return np.clip(x, a_min=0.0, a_max=None)
+
+def save_sensor_conv_kernel(sensor_conv_kernel, output_dir):
+    kernel_csv_path = os.path.join(output_dir, "learned_sensor_conv_kernel.csv")
+    np.savetxt(kernel_csv_path, sensor_conv_kernel, delimiter=",")
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    im = ax.imshow(sensor_conv_kernel, cmap="viridis")
+    ax.set_title("Learned Sensor Conv Kernel")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, "learned_sensor_conv_kernel.png"), dpi=200)
+    plt.close(fig)
+
+def make_gain_corrected_title(base_title, dark_current_eff_drift, learned_gain_curve=None, sensor_conv_kernel=None):
     has_drift = has_dark_current_eff_drift(dark_current_eff_drift)
     has_gain = learned_gain_curve is not None
+    has_sensor_conv = sensor_conv_kernel is not None
+    if has_drift and has_gain and has_sensor_conv:
+        return f"{base_title}_object_linear_corrected"
     if has_drift and has_gain:
         return f"{base_title}_drift_gain_corrected"
+    if has_drift and has_sensor_conv:
+        return f"{base_title}_drift_sensor_deconvolved"
     if has_drift:
         return f"{base_title}_offset_subtracted"
+    if has_gain and has_sensor_conv:
+        return f"{base_title}_gain_sensor_deconvolved"
     if has_gain:
         return f"{base_title}_gain_corrected"
+    if has_sensor_conv:
+        return f"{base_title}_sensor_deconvolved"
     return base_title
 
 def save_learned_monotone_gain_curve(gain_curve_result, output_dir):
@@ -845,31 +1015,48 @@ def load_preprocessed_images(img_paths, crop_size=None, scale=1, dark_current_ef
     return img_list
 
 def build_plane_evaluation_entries(U_recon, reference_img, reference_z, measured_imgs, measured_z_list,
-        wavelength, dx, include_evanescent=False, split_label="train", learned_gain_curve=None):
+        wavelength, dx, include_evanescent=False, split_label="train", learned_gain_curve=None,
+        sensor_conv_kernel=None, sensor_conv_inverse_reg=1e-3, force_linear_domain=False):
     entries = []
-    U_zero = np.sqrt(reference_img) * np.exp(1j * 0)
+    reference_img = np.asarray(reference_img, dtype=np.float64)
+    reference_amplitude = np.sqrt(np.clip(reference_img, a_min=0.0, a_max=None))
+    generated_phase = np.angle(U_recon)
+    U_generated_ref = reference_amplitude * np.exp(1j * generated_phase)
+    U_zero = reference_amplitude * np.exp(1j * 0)
 
     for plane_idx, (z_value, measured_img) in enumerate(zip(measured_z_list, measured_imgs), start=1):
         U_generated = angular_spectrum_propagate_numpy(
-            U_recon, wavelength, dx, z_value - reference_z,
+            U_generated_ref, wavelength, dx, z_value - reference_z,
             include_evanescent=include_evanescent
         )
-        I_generated_linear = np.abs(U_generated) ** 2
+        I_generated_object_linear = np.abs(U_generated) ** 2
+        I_generated_linear = apply_sensor_conv_numpy(I_generated_object_linear, sensor_conv_kernel)
 
         U_zero_plane = angular_spectrum_propagate_numpy(
             U_zero, wavelength, dx, z_value - reference_z,
             include_evanescent=include_evanescent
         )
-        I_zero_linear = np.abs(U_zero_plane) ** 2
+        I_zero_object_linear = np.abs(U_zero_plane) ** 2
+        I_zero_linear = apply_sensor_conv_numpy(I_zero_object_linear, sensor_conv_kernel)
 
         if learned_gain_curve is not None:
             I_generated = apply_learned_monotone_gain_numpy(I_generated_linear, learned_gain_curve)
             I_zero = apply_learned_monotone_gain_numpy(I_zero_linear, learned_gain_curve)
-            I_measured_linear = apply_inverse_learned_monotone_gain_numpy(measured_img, learned_gain_curve)
+            I_measured_sensor_linear = apply_inverse_learned_monotone_gain_numpy(measured_img, learned_gain_curve)
         else:
             I_generated = I_generated_linear
             I_zero = I_zero_linear
-            I_measured_linear = measured_img
+            I_measured_sensor_linear = measured_img
+
+        I_measured_object_linear = apply_inverse_sensor_conv_numpy(
+            I_measured_sensor_linear,
+            sensor_conv_kernel,
+            reg=sensor_conv_inverse_reg
+        )
+
+        if force_linear_domain:
+            I_generated = I_generated_object_linear
+            I_zero = I_zero_object_linear
 
         entries.append({
             "split": split_label,
@@ -877,10 +1064,13 @@ def build_plane_evaluation_entries(U_recon, reference_img, reference_z, measured
             "z_m": z_value,
             "i_gen": I_generated,
             "i_zero": I_zero,
-            "i_gen_linear": I_generated_linear,
-            "i_zero_linear": I_zero_linear,
+            "i_gen_linear": I_generated_object_linear,
+            "i_zero_linear": I_zero_object_linear,
+            "i_gen_object_linear": I_generated_object_linear,
+            "i_zero_object_linear": I_zero_object_linear,
             "i_meas": measured_img,
-            "i_meas_linear": I_measured_linear,
+            "i_meas_linear": I_measured_object_linear,
+            "i_meas_sensor_linear": I_measured_sensor_linear,
         })
 
     return entries
@@ -893,6 +1083,7 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         lr_z=None,
         lr_amp=None,
         lr_gain=None,
+        lr_sensor_conv=None,
         use_lr_scheduler=False,
         lr_decay_gamma=0.5,
         lr_plateau_patience=1000,
@@ -907,6 +1098,13 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         monotone_gain_num_knots=16,
         monotone_gain_weight=0.0,
         monotone_gain_smoothness_weight=0.0,
+        monotone_gain_fixed_input_scale=1.0,
+        learn_monotone_gain_input_scale=False,
+        learn_sensor_conv=False,
+        sensor_conv_kernel_size=3,
+        sensor_conv_shape="full",
+        sensor_conv_identity_weight=0.0,
+        sensor_conv_inverse_reg=1e-3,
         include_reference_plane_in_loss=True,
         reference_plane_weight=1.0,
         train_delta_z=True,
@@ -974,6 +1172,8 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         lr_amp = lr
     if lr_gain is None:
         lr_gain = lr
+    if lr_sensor_conv is None:
+        lr_sensor_conv = lr
 
     if amplitude_grid_shape is None:
         amplitude_param = torch.zeros((ny, nx), dtype=torch.float32, device=device)
@@ -985,17 +1185,61 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
     z_nominal = torch.tensor(z_list, dtype=torch.float32, device=device)
     nominal_spacing = z_nominal[1:] - z_nominal[:-1]
     min_gap = 0.5 * torch.min(nominal_spacing).item()
-    initial_gain_input_scale = max(float(torch.max(Img_list[0]).item()), 1e-3)
+    if monotone_gain_fixed_input_scale is None:
+        initial_gain_input_scale = max(float(torch.max(Img_list[0]).item()), 1e-3)
+    else:
+        initial_gain_input_scale = float(monotone_gain_fixed_input_scale)
 
     if learn_monotone_gain:
         gain_increment_param, gain_log_input_scale = build_learned_monotone_gain_curve(
             monotone_gain_num_knots,
             initial_input_scale=initial_gain_input_scale,
-            device=device
+            device=device,
+            learn_input_scale=learn_monotone_gain_input_scale
         )
     else:
         gain_increment_param = None
         gain_log_input_scale = None
+
+    if learn_sensor_conv:
+        if sensor_conv_kernel_size % 2 == 0 or sensor_conv_kernel_size < 1:
+            raise ValueError("sensor_conv_kernel_size must be a positive odd integer.")
+        if sensor_conv_shape == "radial":
+            sensor_conv_kernel_meta = build_radial_sensor_conv_meta(sensor_conv_kernel_size, device=device)
+            num_radius_bins = int(sensor_conv_kernel_meta["unique_radius_sq"].numel())
+            sensor_conv_kernel_param = torch.full(
+                (num_radius_bins,),
+                inverse_softplus(1e-6),
+                dtype=torch.float32,
+                device=device
+            )
+            sensor_conv_kernel_param[0] = inverse_softplus(1.0)
+        elif sensor_conv_shape == "circular":
+            sensor_conv_kernel_meta = build_circular_sensor_conv_meta(sensor_conv_kernel_size, device=device)
+            num_radius_bins = int(sensor_conv_kernel_meta["unique_radius_sq"].numel())
+            sensor_conv_kernel_param = torch.full(
+                (num_radius_bins,),
+                inverse_softplus(1e-6),
+                dtype=torch.float32,
+                device=device
+            )
+            sensor_conv_kernel_param[0] = inverse_softplus(1.0)
+        elif sensor_conv_shape == "full":
+            sensor_conv_kernel_meta = None
+            sensor_conv_kernel_param = torch.full(
+                (sensor_conv_kernel_size, sensor_conv_kernel_size),
+                inverse_softplus(1e-6),
+                dtype=torch.float32,
+                device=device
+            )
+            center = sensor_conv_kernel_size // 2
+            sensor_conv_kernel_param[center, center] = inverse_softplus(1.0)
+        else:
+            raise ValueError(f"Unsupported sensor_conv_shape: {sensor_conv_shape}")
+        sensor_conv_kernel_param.requires_grad_(True)
+    else:
+        sensor_conv_kernel_param = None
+        sensor_conv_kernel_meta = None
 
     if train_delta_z:
         if z_param_mode not in ["plane_shift", "spacing"]:
@@ -1014,9 +1258,17 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
     if train_amplitude:
         param_groups.append({"params": [amplitude_param], "lr": lr_amp})
     if learn_monotone_gain:
+        gain_params = [gain_increment_param]
+        if gain_log_input_scale.requires_grad:
+            gain_params.append(gain_log_input_scale)
         param_groups.append({
-            "params": [gain_increment_param, gain_log_input_scale],
+            "params": gain_params,
             "lr": lr_gain
+        })
+    if learn_sensor_conv:
+        param_groups.append({
+            "params": [sensor_conv_kernel_param],
+            "lr": lr_sensor_conv
         })
 
     optimizer = torch.optim.Adam(param_groups)
@@ -1049,6 +1301,7 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         "amplitude": [],
         "gain_reg": [],
         "gain_smooth": [],
+        "sensor_conv_reg": [],
         "z": [],
         "monotonic": [],
     }
@@ -1112,6 +1365,20 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
             loss_gain_reg = torch.tensor(0.0, dtype=torch.float32, device=device)
             loss_gain_smooth = torch.tensor(0.0, dtype=torch.float32, device=device)
 
+        if learn_sensor_conv:
+            sensor_conv_kernel = build_sensor_conv_kernel(
+                sensor_conv_kernel_param,
+                sensor_conv_kernel_meta=sensor_conv_kernel_meta
+            )
+            identity_kernel = torch.zeros_like(sensor_conv_kernel)
+            center = sensor_conv_kernel.shape[0] // 2
+            identity_kernel[center, center] = 1.0
+            loss_sensor_conv_reg = sensor_conv_identity_weight * torch.mean(
+                (sensor_conv_kernel - identity_kernel) ** 2
+            )
+        else:
+            loss_sensor_conv_reg = torch.tensor(0.0, dtype=torch.float32, device=device)
+
         loss_data = 0
         loss_corr = 0
         loss_ssim = 0
@@ -1124,25 +1391,36 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         monotonic_weight = resolve_weight_schedule(monotonic_weight, progress)
 
         if include_reference_plane_in_loss:
-            I0_linear = torch.abs(U0) ** 2
+            I0_object_linear = torch.abs(U0) ** 2
+            I0_sensor_linear = apply_sensor_conv_torch(
+                I0_object_linear,
+                sensor_conv_kernel_param,
+                sensor_conv_kernel_meta=sensor_conv_kernel_meta
+            )
             if learn_monotone_gain:
-                I0_meas_domain = apply_learned_monotone_gain_torch(
-                    I0_linear,
+                I0_target_sensor_linear = apply_inverse_learned_monotone_gain_torch(
+                    Img_list[0],
                     gain_increment_param,
                     gain_log_input_scale
                 )
             else:
-                I0_meas_domain = I0_linear
+                I0_target_sensor_linear = Img_list[0]
+            I0_target_linear = apply_inverse_sensor_conv_torch(
+                I0_target_sensor_linear,
+                sensor_conv_kernel_param,
+                sensor_conv_kernel_meta=sensor_conv_kernel_meta,
+                reg=sensor_conv_inverse_reg
+            )
 
             ref_weight = float(reference_plane_weight)
             loss_data += ref_weight * compute_intensity_loss(
-                I0_meas_domain,
-                Img_list[0],
+                I0_object_linear,
+                I0_target_linear,
                 mode=data_loss_mode,
                 weight_power=data_loss_weight_power
             )
-            loss_corr += ref_weight * compute_correlation_loss(I0_meas_domain, Img_list[0])
-            loss_ssim += ref_weight * compute_ssim_loss(I0_meas_domain, Img_list[0])
+            loss_corr += ref_weight * compute_correlation_loss(I0_object_linear, I0_target_linear)
+            loss_ssim += ref_weight * compute_ssim_loss(I0_object_linear, I0_target_linear)
             loss_norm += ref_weight
 
         stage_label = "all"
@@ -1179,25 +1457,31 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
                 z_current[i] - z_current[0],
                 include_evanescent=include_evanescent
             )
-            I_pred = torch.abs(U_prop) ** 2
+            I_pred_object_linear = torch.abs(U_prop) ** 2
             if learn_monotone_gain:
-                I_pred_meas_domain = apply_learned_monotone_gain_torch(
-                    I_pred,
+                I_target_sensor_linear = apply_inverse_learned_monotone_gain_torch(
+                    Img_list[i],
                     gain_increment_param,
                     gain_log_input_scale
                 )
             else:
-                I_pred_meas_domain = I_pred
+                I_target_sensor_linear = Img_list[i]
+            I_target_linear = apply_inverse_sensor_conv_torch(
+                I_target_sensor_linear,
+                sensor_conv_kernel_param,
+                sensor_conv_kernel_meta=sensor_conv_kernel_meta,
+                reg=sensor_conv_inverse_reg
+            )
             # Old baseline:
             # loss_data += torch.mean(torch.abs(I_pred - Img_list[i]))
             loss_data += compute_intensity_loss(
-                I_pred_meas_domain,
-                Img_list[i],
+                I_pred_object_linear,
+                I_target_linear,
                 mode=data_loss_mode,
                 weight_power=data_loss_weight_power
             )
-            loss_corr += compute_correlation_loss(I_pred_meas_domain, Img_list[i])
-            loss_ssim += compute_ssim_loss(I_pred_meas_domain, Img_list[i])
+            loss_corr += compute_correlation_loss(I_pred_object_linear, I_target_linear)
+            loss_ssim += compute_ssim_loss(I_pred_object_linear, I_target_linear)
             loss_norm += 1.0
 
         loss_norm = max(loss_norm, 1.0)
@@ -1230,6 +1514,7 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
             + loss_amplitude
             + loss_gain_reg
             + loss_gain_smooth
+            + loss_sensor_conv_reg
             + loss_z
             + loss_monotonic
         )
@@ -1246,6 +1531,7 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         loss_history["amplitude"].append(loss_amplitude.item())
         loss_history["gain_reg"].append(loss_gain_reg.item())
         loss_history["gain_smooth"].append(loss_gain_smooth.item())
+        loss_history["sensor_conv_reg"].append(loss_sensor_conv_reg.item())
         loss_history["z"].append(loss_z.item())
         loss_history["monotonic"].append(loss_monotonic.item())
 
@@ -1265,6 +1551,7 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
                 f"Amp {loss_amplitude.item():.4e} | "
                 f"GainReg {loss_gain_reg.item():.4e} | "
                 f"GainSmooth {loss_gain_smooth.item():.4e} | "
+                f"SensorConvReg {loss_sensor_conv_reg.item():.4e} | "
                 f"Z {loss_z.item():.4e} | "
                 f"Mono {loss_monotonic.item():.4e} | "
                 f"LR {optimizer.param_groups[0]['lr']:.2e} | "
@@ -1310,26 +1597,45 @@ def multi_plane_gradient(Img_list, z_list, wavelength, dx, n_iter=500, lr=5e-3,
         )
     else:
         learned_gain_curve = None
+    learned_sensor_conv_kernel = build_sensor_conv_kernel_numpy(
+        sensor_conv_kernel_param,
+        sensor_conv_kernel_meta=sensor_conv_kernel_meta
+    ) if learn_sensor_conv else None
     if curriculum == True:
         print(count)
-    return U_final, z_optimized, delta_z_final, loss_history, learned_gain_curve
+    return U_final, z_optimized, delta_z_final, loss_history, learned_gain_curve, learned_sensor_conv_kernel
 
 
 # ====== main function ======
 if __name__ == "__main__":
     # === training z distance list ===
     train_z_list = [
-        0.340, 
-        0.341, 
+        # 0.340, 
+        # 0.341, 
         # 0.342, 
-        0.343, 
+        # 0.343, 
         # 0.344, 
         # 0.345, 
-        0.346, 
+        # 0.346, 
         # 0.347, 
         # 0.348, 
-        0.349, 
+        # 0.349, 
         # 0.350,
+
+        0.09319,
+        0.09514,
+        0.09746,
+        0.09805,
+        0.10177,
+        0.10482,
+        0.10702,
+        0.10777,
+        0.11192,
+        0.11198,
+        0.12041,
+        # 0.12837,
+        # 0.13326,
+        # 0.14269,
     ]
     # === training image paths ===
     # train_img_paths = [
@@ -1346,17 +1652,32 @@ if __name__ == "__main__":
     #     # "other_data/NVLab260130_fixed/0.2THz_35.0cm_1.bmp",
     # ]
     train_img_paths = [
-        "other_data/NVLab260130_fixed/0.2THz_34.0cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.1cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.0cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.1cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.2cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.3cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.3cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.4cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.5cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.6cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.6cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.7cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.8cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.9cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.9cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_35.0cm_2.bmp",
+
+        "other_data/NVLab260519_fixed/93.19mm.png",
+        "other_data/NVLab260519_fixed/95.14mm.png",
+        "other_data/NVLab260519_fixed/97.46mm.png",
+        "other_data/NVLab260519_fixed/98.05mm.png",
+        "other_data/NVLab260519_fixed/101.77mm.png",
+        "other_data/NVLab260519_fixed/104.82mm.png",
+        "other_data/NVLab260519_fixed/107.02mm.png",
+        "other_data/NVLab260519_fixed/107.77mm.png",
+        "other_data/NVLab260519_fixed/111.92mm.png",
+        "other_data/NVLab260519_fixed/111.98mm.png",
+        "other_data/NVLab260519_fixed/120.41mm.png",
+        # "other_data/NVLab260519_fixed/128.37mm.png",
+        # "other_data/NVLab260519_fixed/133.26mm.png",
+        # "other_data/NVLab260519_fixed/142.69mm.png",
     ]
 
     # train_img_paths = [
@@ -1392,40 +1713,40 @@ if __name__ == "__main__":
     val_z_list = [
         # 0.340,
         # 0.341,
-        0.342,
+        # 0.342,
         # 0.343,
-        0.344,
-        0.345,
+        # 0.344,
+        # 0.345,
         # 0.346,
-        0.347,
-        0.348,
+        # 0.347,
+        # 0.348,
         # 0.349,
-        0.350,
+        # 0.350,
     ]
     val_img_paths = [
         # "other_data/NVLab260130_fixed/0.2THz_34.0cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.1cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.2cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.2cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.3cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.4cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.5cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.4cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.5cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.6cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.7cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_34.8cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.7cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_34.8cm_2.bmp",
         # "other_data/NVLab260130_fixed/0.2THz_34.9cm_2.bmp",
-        "other_data/NVLab260130_fixed/0.2THz_35.0cm_2.bmp",
+        # "other_data/NVLab260130_fixed/0.2THz_35.0cm_2.bmp",
     ]
 
-    output_dir = "other_data/NVLab260130_results"
+    output_dir = "other_data/NVLab260519_results"
     os.makedirs(output_dir, exist_ok=True)
 
     # TODO: balance the weighting
-    # TODO: create xy axis displacement (?
-    # TODO: iteration method to produce initial phase (?
-    # TODO: radial and stripe combined initial phase (?
-    # TODO: consider camera effect, restore real image before phase retrieval (!!
-    # TODO: model the initial phase with point source assumption (!!
-    # TODO: gain modefication
+    # TODO: create xy axis displacement (?)
+    # TODO: iteration method to produce initial phase (?)
+    # TODO: radial and stripe combined initial phase (?)
+    # TODO: add conv layer as sensor-front diffraction (seems to be failed)
+    # TODO: model the initial phase with point source assumption (!!)
+    # TODO: gamma correction (?)
 
     # ====== Hyperparameters ======
     wavelength = 2.998e8 / 0.2004e12
@@ -1434,18 +1755,18 @@ if __name__ == "__main__":
     spatial_binning_factor = 1  # block-average neighboring pixels before propagation; effective dx becomes dx * binning / scale
     scale = 1  # upsampling
     # dark_current_eff_drift = "other_data/NVLab260417/con50_bri-100_noise_analysis/all_bursts_pixelwise_average.txt"  # scalar normalized offset e.g. 27.75 / 255, txt path, or full-size drift matrix subtracted before all other processing
-    dark_current_eff_drift = 27.75 / 255 # set eff_drift as constant seems having better performance
-    number_iter = 15000
+    dark_current_eff_drift = 28 / 255 #27.75 / 255 # set eff_drift as constant seems having better performance
+    number_iter = 30000
     learning_rate = 1e-4  # lr if no specific lr_phase and lr_z
-    include_evanescent = False  # include evanescent wave
+    include_evanescent = True  # include evanescent wave
 
     # === phase coarse-grid ===
-    phase_grid_shape = (384 // 6, 288 // 6)  # None, (128, 128), or (64, 64), or (384, 288)
+    phase_grid_shape = (384 // 4, 288 // 4)  # None, (128, 128), or (64, 64), or (384, 288)
 
     # === learning rate strategy ===
     use_lr_scheduler = True  # ReduceLROnPlateau
     lr_decay_gamma = 0.5
-    lr_plateau_patience = 3000
+    lr_plateau_patience = int(0.15 * number_iter)  # typically 5 ~ 15% depends on how fluctuation training curve is
     lr_plateau_threshold = 1e-4
     lr_min = 1e-10
 
@@ -1454,12 +1775,12 @@ if __name__ == "__main__":
     # "weighted_l1": emphasize bright informative regions
     # "normalized_l1": compare normalized intensity only
     # "weighted_normalized_l1": emphasize bright informative regions after normalization
-    data_weight = 0  # 1e-2
+    data_weight = 5e-2
     data_loss_mode = "weighted_l2"
-    data_loss_weight_power = 1.5  # for weighted mode: brightness weight power
+    data_loss_weight_power = 3  # for weighted mode: brightness weight power
 
     # === Correlation loss === global correlation loss
-    correlation_loss_weight = 5e-2  # focuses on whether the diffraction pattern shape matches.
+    correlation_loss_weight = 0#1e-3  # focuses on whether the diffraction pattern shape matches.
 
     # === SSIM loss === including local correlation loss
     ssim_loss_weight = 0#1e1  # focuses on local structural similarity.
@@ -1471,20 +1792,30 @@ if __name__ == "__main__":
     phase_curv_weight = 0.5  # curvature weight(adjacent of adjacent)
 
     # === amplitude correction on Img_list[0] ===
-    train_amplitude = True  # learn a small multiplicative correction on the first-plane amplitude
+    train_amplitude = False  # learn a small multiplicative correction on the first-plane amplitude
     lr_amp = 1e-4
     amplitude_grid_shape = None  # None for full-resolution correction, or coarse grid like (64, 64)
     amplitude_update_limit = 0.1 # amplitude multiplier stays within about 1 +/- limit
     amplitude_weight = 1e-3  # keep the learned amplitude close to the measured baseline
 
     # === monotone camera gain ===
-    learn_monotone_gain = True  # jointly learn a monotone mapping from linear intensity to measured pixel value
+    learn_monotone_gain = False  # jointly learn a monotone mapping from linear intensity to measured pixel value
     lr_gain = 1e-4
     monotone_gain_num_knots = 16
     monotone_gain_weight = 1e-4  # mild identity prior so the learned gain does not drift arbitrarily
     monotone_gain_smoothness_weight = 1e-4
-    include_reference_plane_in_loss = True  # also match z0 in measurement domain so gain and source amplitude co-adapt
+    monotone_gain_fixed_input_scale = 1.0  # force the learned gain curve to pass through (1, 1)
+    learn_monotone_gain_input_scale = False
+    include_reference_plane_in_loss = True  # also match z0 in the same comparison domain so gain and source amplitude co-adapt
     reference_plane_weight = 1.0
+
+    # === sensor-side spatial coupling ===
+    learn_sensor_conv = False  # learn a small nonnegative, sum-to-one kernel in the sensor-linear domain
+    lr_sensor_conv = 1e-4
+    sensor_conv_kernel_size = 11
+    sensor_conv_shape = "circular"  # "circular" for circular support + radial symmetry, "radial" for radial symmetry on the full square grid, or "full" for a free 2D kernel
+    sensor_conv_identity_weight = 1e-4  # keep the learned kernel close to an identity impulse unless data wants coupling
+    sensor_conv_inverse_reg = 1e-3  # Wiener-style regularization when mapping measured data back to object-linear domain
 
     # === z distance ===
     train_delta_z = False  # whether to optimize z distances
@@ -1565,7 +1896,7 @@ if __name__ == "__main__":
         phase_init_scale=phase_init_scale
     ).detach().cpu().numpy()
 
-    U_recon, z_optimized, delta_z_final, loss_history, learned_gain_curve = multi_plane_gradient(
+    U_recon, z_optimized, delta_z_final, loss_history, learned_gain_curve, learned_sensor_conv_kernel = multi_plane_gradient(
         train_imgs_torch,
         train_z_list,
         wavelength,
@@ -1576,6 +1907,7 @@ if __name__ == "__main__":
         lr_z=lr_z,
         lr_amp=lr_amp,
         lr_gain=lr_gain,
+        lr_sensor_conv=lr_sensor_conv,
         use_lr_scheduler=use_lr_scheduler,
         lr_decay_gamma=lr_decay_gamma,
         lr_plateau_patience=lr_plateau_patience,
@@ -1590,6 +1922,13 @@ if __name__ == "__main__":
         monotone_gain_num_knots=monotone_gain_num_knots,
         monotone_gain_weight=monotone_gain_weight,
         monotone_gain_smoothness_weight=monotone_gain_smoothness_weight,
+        monotone_gain_fixed_input_scale=monotone_gain_fixed_input_scale,
+        learn_monotone_gain_input_scale=learn_monotone_gain_input_scale,
+        learn_sensor_conv=learn_sensor_conv,
+        sensor_conv_kernel_size=sensor_conv_kernel_size,
+        sensor_conv_shape=sensor_conv_shape,
+        sensor_conv_identity_weight=sensor_conv_identity_weight,
+        sensor_conv_inverse_reg=sensor_conv_inverse_reg,
         include_reference_plane_in_loss=include_reference_plane_in_loss,
         reference_plane_weight=reference_plane_weight,
         train_delta_z=train_delta_z,
@@ -1631,6 +1970,12 @@ if __name__ == "__main__":
     print("dark_current_eff_drift:", dark_current_eff_drift)
     print("train_amplitude:", train_amplitude)
     print("learn_monotone_gain:", learn_monotone_gain)
+    print("monotone_gain_fixed_input_scale:", monotone_gain_fixed_input_scale)
+    print("learn_monotone_gain_input_scale:", learn_monotone_gain_input_scale)
+    print("learn_sensor_conv:", learn_sensor_conv)
+    print("sensor_conv_kernel_size:", sensor_conv_kernel_size)
+    print("sensor_conv_shape:", sensor_conv_shape)
+    print("sensor_conv_inverse_reg:", sensor_conv_inverse_reg)
     print("include_reference_plane_in_loss:", include_reference_plane_in_loss)
     print("reference_plane_weight:", reference_plane_weight)
     print("data_weight:", data_weight)
@@ -1642,7 +1987,7 @@ if __name__ == "__main__":
         print("Optimized z_list (mm):", np.round(z_optimized * 1e3, 2))
         print("delta_z (mm):", np.round(delta_z_final * 1e3, 2))
 
-    loss_keys_to_plot = ["total", "data", "corr", "ssim", "phase", "amplitude", "gain_reg", "gain_smooth"]  # the losses to be plot
+    loss_keys_to_plot = ["total", "data", "corr", "ssim", "phase", "amplitude", "gain_reg", "gain_smooth", "sensor_conv_reg"]  # the losses to be plot
     plot_loss_history(
         loss_history,
         keys_to_plot=loss_keys_to_plot,
@@ -1650,9 +1995,20 @@ if __name__ == "__main__":
         show_plot=True
     )
 
+    reference_measured_sensor_linear = (
+        apply_inverse_learned_monotone_gain_numpy(train_imgs[0], learned_gain_curve)
+        if learned_gain_curve is not None else train_imgs[0]
+    )
+    reference_measured_linear = apply_inverse_sensor_conv_numpy(
+        reference_measured_sensor_linear,
+        learned_sensor_conv_kernel,
+        reg=sensor_conv_inverse_reg
+    )
+    use_linear_domain_outputs = has_dark_current_eff_drift(dark_current_eff_drift) or learn_monotone_gain or learn_sensor_conv
+
     train_eval_entries = build_plane_evaluation_entries(
         U_recon,
-        train_imgs[0],
+        reference_measured_linear,
         train_z_list[0],
         train_imgs[1:],
         train_z_list[1:],
@@ -1660,11 +2016,14 @@ if __name__ == "__main__":
         effective_dx,
         include_evanescent=include_evanescent,
         split_label="train",
-        learned_gain_curve=learned_gain_curve
+        learned_gain_curve=learned_gain_curve,
+        sensor_conv_kernel=learned_sensor_conv_kernel,
+        sensor_conv_inverse_reg=sensor_conv_inverse_reg,
+        force_linear_domain=use_linear_domain_outputs
     )
     val_eval_entries = build_plane_evaluation_entries(
         U_recon,
-        train_imgs[0],
+        reference_measured_linear,
         train_z_list[0],
         val_imgs,
         val_z_list,
@@ -1672,21 +2031,70 @@ if __name__ == "__main__":
         effective_dx,
         include_evanescent=include_evanescent,
         split_label="val",
-        learned_gain_curve=learned_gain_curve
+        learned_gain_curve=learned_gain_curve,
+        sensor_conv_kernel=learned_sensor_conv_kernel,
+        sensor_conv_inverse_reg=sensor_conv_inverse_reg,
+        force_linear_domain=use_linear_domain_outputs
     )
     all_eval_entries = train_eval_entries + val_eval_entries
 
     if learned_gain_curve is not None:
         save_learned_monotone_gain_curve(learned_gain_curve, output_dir)
         print("\n===== Learned Monotone Gain Curve =====")
-        print("Jointly optimized with phase retrieval in the measurement domain.")
+        print("Jointly optimized with phase retrieval while mapping measured data back to object-linear domain for comparison.")
         print("input_scale:", learned_gain_curve["input_scale"])
         print("num_knots:", learned_gain_curve["num_knots"])
+    if learned_sensor_conv_kernel is not None:
+        save_sensor_conv_kernel(learned_sensor_conv_kernel, output_dir)
+        print("\n===== Learned Sensor Conv Kernel =====")
+        print(learned_sensor_conv_kernel)
+    # For z0 visualization/metric, all three columns should represent the same
+    # measured-derived linear amplitude; only the hidden phase interpretation differs.
+    reference_zero_linear = reference_measured_linear
+    reference_generated_linear = reference_measured_linear
 
     metric_rows = []
+    ref_gen_metrics = evaluate_intensity_metrics(reference_generated_linear, reference_measured_linear)
+    ref_zero_metrics = evaluate_intensity_metrics(reference_zero_linear, reference_measured_linear)
+    metric_rows.append({
+        "split": "train",
+        "plane": 0,
+        "z_mm": train_z_list[0] * 1e3,
+        "ssim_gen": ref_gen_metrics["ssim"],
+        "ssim_zero": ref_zero_metrics["ssim"],
+        "ssim_center256_gen": ref_gen_metrics["ssim_center256"],
+        "ssim_center256_zero": ref_zero_metrics["ssim_center256"],
+        "corr_gen": ref_gen_metrics["corr"],
+        "corr_zero": ref_zero_metrics["corr"],
+        "corr_center256_gen": ref_gen_metrics["corr_center256"],
+        "corr_center256_zero": ref_zero_metrics["corr_center256"],
+        "mae_gen": ref_gen_metrics["mae"],
+        "mae_zero": ref_zero_metrics["mae"],
+        "mae_center256_gen": ref_gen_metrics["mae_center256"],
+        "mae_center256_zero": ref_zero_metrics["mae_center256"],
+        "energy_err_gen": ref_gen_metrics["energy_err"],
+        "energy_err_zero": ref_zero_metrics["energy_err"],
+        "energy_err_center256_gen": ref_gen_metrics["energy_err_center256"],
+        "energy_err_center256_zero": ref_zero_metrics["energy_err_center256"],
+        "ssim_masked_gen": ref_gen_metrics["ssim_masked"],
+        "ssim_masked_zero": ref_zero_metrics["ssim_masked"],
+        "ssim_masked_center256_gen": ref_gen_metrics["ssim_masked_center256"],
+        "ssim_masked_center256_zero": ref_zero_metrics["ssim_masked_center256"],
+        "corr_masked_gen": ref_gen_metrics["corr_masked"],
+        "corr_masked_zero": ref_zero_metrics["corr_masked"],
+        "corr_masked_center256_gen": ref_gen_metrics["corr_masked_center256"],
+        "corr_masked_center256_zero": ref_zero_metrics["corr_masked_center256"],
+        "mae_masked_gen": ref_gen_metrics["mae_masked"],
+        "mae_masked_zero": ref_zero_metrics["mae_masked"],
+        "mae_masked_center256_gen": ref_gen_metrics["mae_masked_center256"],
+        "mae_masked_center256_zero": ref_zero_metrics["mae_masked_center256"],
+        "mask_ratio": ref_gen_metrics["mask_ratio"],
+        "mask_ratio_center256": ref_gen_metrics["mask_ratio_center256"],
+    })
+
     for entry in all_eval_entries:
-        gen_metrics = evaluate_intensity_metrics(entry["i_gen"], entry["i_meas"])
-        zero_metrics = evaluate_intensity_metrics(entry["i_zero"], entry["i_meas"])
+        gen_metrics = evaluate_intensity_metrics(entry["i_gen_linear"], entry["i_meas_linear"])
+        zero_metrics = evaluate_intensity_metrics(entry["i_zero_linear"], entry["i_meas_linear"])
 
         metric_rows.append({
             "split": entry["split"],
@@ -1747,6 +2155,7 @@ if __name__ == "__main__":
         }
 
         print("\n===== Metric Summary =====")
+        print("Metrics are computed in the same object-linear domain used by the loss.")
         print(
             f"SSIM mean | Generated {metric_summary['ssim_gen_mean']:.4f} | "
             f"Zero-phase {metric_summary['ssim_zero_mean']:.4f}"
@@ -1798,26 +2207,24 @@ if __name__ == "__main__":
                 writer.writerow([key, value])
 
     images = []
-    measured_z0_linear = (
-        apply_inverse_learned_monotone_gain_numpy(train_imgs[0], learned_gain_curve)
-        if learned_gain_curve is not None else train_imgs[0]
-    )
     zero_phase_title_z0 = make_gain_corrected_title(
         "Zero_phase_intensity_z0",
         None,
-        learned_gain_curve=learned_gain_curve
+        learned_gain_curve=learned_gain_curve,
+        sensor_conv_kernel=learned_sensor_conv_kernel
     )
     generated_title_z0 = make_gain_corrected_title(
         "Generated_intensity_z0",
         None,
-        learned_gain_curve=learned_gain_curve
+        learned_gain_curve=learned_gain_curve,
+        sensor_conv_kernel=learned_sensor_conv_kernel
     )
     measured_title_z0 = make_gain_corrected_title(
         "Measured_intensity_z0",
         dark_current_eff_drift,
-        learned_gain_curve=learned_gain_curve
+        learned_gain_curve=learned_gain_curve,
+        sensor_conv_kernel=learned_sensor_conv_kernel
     )
-    generated_z0_img = I_recon
 
     # === append fixed image ===
     images.append((np.zeros_like(train_imgs[0]), "Blank"))
@@ -1827,26 +2234,29 @@ if __name__ == "__main__":
     images.append((np.zeros_like(train_imgs[0]), "Blank"))
     images.append((phase, "Reconstructed_phase"))
     
-    images.append((measured_z0_linear, zero_phase_title_z0))
-    images.append((generated_z0_img, generated_title_z0))
-    images.append((measured_z0_linear, measured_title_z0))
+    images.append((reference_zero_linear, zero_phase_title_z0))
+    images.append((reference_generated_linear, generated_title_z0))
+    images.append((reference_measured_linear, measured_title_z0))
     
     # === add train/validation image triplets ===
     for entry in train_eval_entries:
         zero_title = make_gain_corrected_title(
             f"Train_zero_phase_intensity_z{entry['plane']}",
             None,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         generated_title = make_gain_corrected_title(
             f"Train_generated_intensity_z{entry['plane']}",
             None,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         measured_title = make_gain_corrected_title(
             f"Train_measured_intensity_z{entry['plane']}",
             dark_current_eff_drift,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         images.append((entry["i_zero_linear"], zero_title))
         images.append((entry["i_gen_linear"], generated_title))
@@ -1856,17 +2266,20 @@ if __name__ == "__main__":
         zero_title = make_gain_corrected_title(
             f"Val_zero_phase_intensity_z{entry['plane']}",
             None,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         generated_title = make_gain_corrected_title(
             f"Val_generated_intensity_z{entry['plane']}",
             None,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         measured_title = make_gain_corrected_title(
             f"Val_measured_intensity_z{entry['plane']}",
             dark_current_eff_drift,
-            learned_gain_curve=learned_gain_curve
+            learned_gain_curve=learned_gain_curve,
+            sensor_conv_kernel=learned_sensor_conv_kernel
         )
         images.append((entry["i_zero_linear"], zero_title))
         images.append((entry["i_gen_linear"], generated_title))

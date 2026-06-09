@@ -3,8 +3,8 @@ import cv2
 import numpy as np
 from datetime import datetime
 
-input_dir = "other_data/NVLab260130"
-output_dir = "other_data/NVLab260130_averaged"
+input_dir = "other_data/NVLab260519/142.69mm"
+output_dir = "other_data/NVLab260519_averaged"
 os.makedirs(output_dir, exist_ok=True)
 
 exts = (".png", ".bmp", ".jpg", ".jpeg")
