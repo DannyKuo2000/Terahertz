@@ -28,18 +28,18 @@ ENCODER_CONFIG = {
 
     # 最後的size處理(重複使用以下的ResizePadLayer)
     "crop_size_source": None,
-    "resize_size_source": (1200, 1200),  # resize size, e.g., (H, W)
-    "pad_size_source": (4096, 4096),  # final size, e.g., (H, W)
+    "resize_size_source": (2286, 2286),  # resize size, e.g., (H, W)
+    "pad_size_source": (8192, 8192),  # final size, e.g., (H, W)
     "source_is_intensity": True,
 
     #====== ResizePadLayer ======
     "crop_size": None,
-    "resize_size": (1200, 1200),  # resize size of input, e.g., (H, W)
+    "resize_size": (2286, 2286),  # resize size of input, e.g., (H, W)
     # "pad_size": (512, 512),  # final size of input, e.g., (H, W)
     # "resize_size": (256, 256),  # resize size, e.g., (H, W)
-    "pad_size": (4096, 4096),  # final size, e.g., (H, W)
-    #0.01344,
-    #0.01008,
+    "pad_size": (8192, 8192),  # final size, e.g., (H, W)
+    #35um * 384 = 0.01344m,
+    #35um * 288 = 0.01008m,
     #pitch: 35um
     
     #====== Number of MaterialLayer ======
@@ -48,8 +48,8 @@ ENCODER_CONFIG = {
     #====== DiffractiveLayer ======
     # "dx": 0.00075/2,            # 空間解析度 (m)
     # "dx": 0.000234375,
-    "dx": 0.000035,
-    "num_size_diffractive": 4096,          # 每層大小
+    "dx": 0.000035/2,
+    "num_size_diffractive": 8192,          # 每層大小
     "frequency": 0.2004e12,      # THz頻率
     #"z": [0.06, 0.06, 0.06, 0.06],        # 層間距離 (m)
     #"z": [0.142, 0.041],        # 層間距離 (m)
@@ -76,8 +76,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens1",
             "focal_length": 0.26,
-            "dx": 0.000035,
-            "num_size": 4096,
+            "dx": 0.000035/2,
+            "num_size": 8192,
             "pupil_type": "circular",
             "pupil_radius": 0.05, # 0.05
             "pupil_width": None,
@@ -91,8 +91,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2",
             "focal_length": 0.043,
-            "dx": 0.000035,
-            "num_size": 4096, 
+            "dx": 0.000035/2,
+            "num_size": 8192, 
             "pupil_type": "circular",
             "pupil_radius": 0.06, # 0.025
             "pupil_width": None,
@@ -108,8 +108,8 @@ ENCODER_CONFIG = {
 
     #====== SensorLayer ======
     "active_sensor": True, # 開關
-    "crop_size": (288, 384),
-    "bin_size": 1,
+    "crop_size": (288*2, 384*2),
+    "bin_size": 2,
     "flip": True,
 
     #====== SensorNoiseLayer ======

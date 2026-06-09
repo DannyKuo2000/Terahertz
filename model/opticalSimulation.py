@@ -16,17 +16,13 @@ Experiments Relative parameters:
     Absorption coefficient: 1e-5
     Sub THz: 0.2004e12
 
-註解符號說明:
-    ###說明概念
-    #說明程式碼
 
-器材訊息:
-透鏡架2: Newport M-LH-2A: https://www.newport.com/p/M-LH-2A
-透鏡2: 1.55 µm BCX Lens: 針對 1.55 µm 波長最佳化設計的雙凸透鏡
+lens frame: Newport M-LH-2A: https://www.newport.com/p/M-LH-2A
+laser lens: 1.55 µm BCX Lens
 """
 class SourceLayer(nn.Module):
     """
-    模擬 source 不均勻時使用的 layer
+    Simulate real source pattern
     """
     def __init__(self, use_input=True, input=None, mode="white", size_source=(128, 128),
                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
@@ -43,7 +39,7 @@ class SourceLayer(nn.Module):
         if pad_size_source is None and new_size_source is not None:
             pad_size_source = new_size_source
 
-        # Gaussian beam 參數
+        # Gaussian beam parameter
         self.sigma = sigma
         self.amplitude = amplitude
         self.center = center
@@ -58,29 +54,21 @@ class SourceLayer(nn.Module):
         )
 
     def forward(self, x):
-        device = x.device  # ✅ 確保所有 tensor 都跟 x 在同一裝置上
-
+        device = x.device  
         if self.use_input:
             if self.input is None:
-                raise ValueError("use_input=True 時必須在 init 傳入 condition")
+                raise ValueError("Need source image")
             
-            # 讀入圖片
-            img = Image.open(self.input).convert("L")  # 灰階
+            img = Image.open(self.input).convert("L") 
             transform = T.ToTensor()
             source_background = transform(img).unsqueeze(0)  # (1, 1, H, W)
             if self.source_is_intensity:
                 source_background = torch.sqrt(torch.clamp(source_background, min=0.0))
 
-
-
-            # ✅ 保證 self.input 在同一 device
             input_resized = self.resize_pad(source_background.to(device=device, dtype=x.dtype))
             return x * input_resized
 
         else:
-            # -------------------
-            # 產生自訂光源
-            # -------------------
             H, W = self.size_source
 
             if self.mode == "white":
@@ -93,11 +81,9 @@ class SourceLayer(nn.Module):
                     indexing="ij"
                 )
 
-                # 平移中心
                 xx = xx - self.center[0]
                 yy = yy - self.center[1]
 
-                # 旋轉
                 if self.rotation != 0.0:
                     cos_t = math.cos(self.rotation)
                     sin_t = math.sin(self.rotation)
@@ -105,7 +91,7 @@ class SourceLayer(nn.Module):
                     y_rot = sin_t * xx + cos_t * yy
                     xx, yy = x_rot, y_rot
 
-                # 橢圓比例與 Gaussian 分布
+                # Gaussian
                 xx = xx / self.aspect_ratio
                 r2 = xx**2 + yy**2
                 src = self.amplitude * torch.exp(-r2 / (2 * self.sigma**2))
@@ -119,12 +105,12 @@ class SourceLayer(nn.Module):
 
 class CropResizeDisplacePadLayer(nn.Module):
     """
-    用來執行 crop, resize, displace pad 的 layer
+    Simulation of crop, resize, displace, pad
     """
     def __init__(self, crop_size=None, resize_size=None, displace=None, pad_size=None, mode='bilinear'):
         """
-        resize_size: tuple (H_resize, W_resize) or None，先 resize 到此大小
-        new_size: tuple (H_new, W_new) or None，最後強制調整成這個大小（padding 或裁切）
+        resize_size: tuple (H_resize, W_resize) or None
+        new_size: tuple (H_new, W_new) or None
         mode: resize interpolation mode ('bilinear', 'nearest', etc.)
         """
         super().__init__()
@@ -136,7 +122,7 @@ class CropResizeDisplacePadLayer(nn.Module):
 
     def forward(self, x):
         """
-        x: tensor (B, C, H, W)，可以是實數或複數
+        x: tensor (B, C, H, W), could be real
         """
         B, C, H, W = x.shape
         # -------------------------
@@ -169,17 +155,16 @@ class CropResizeDisplacePadLayer(nn.Module):
                 x = F.interpolate(x, size=self.resize_size, mode=self.mode, align_corners=False)
             print(x.shape)
         # -------------------------
-        # Displacement / Padding or Cropping 到 pad_size
+        # Displacement / Padding or Cropping ??pad_size
         # -------------------------
         if self.pad_size is not None:
-            cur_H, cur_W = x.shape[-2:]  # 目前 HW
-            target_H, target_W = self.pad_size  # 目標 HW
+            cur_H, cur_W = x.shape[-2:]
+            target_H, target_W = self.pad_size
 
 
             pad_h = target_H - cur_H
             pad_w = target_W - cur_W
 
-            # 往下往右為正
             if pad_h >= 0 and pad_w >= 0:
                 # zero padding
                 pad_top = pad_h // 2 + self.displace[0]
@@ -193,7 +178,7 @@ class CropResizeDisplacePadLayer(nn.Module):
                 else:
                     x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom))
             else:
-                # 中心裁切
+                # center crop
                 start_h = (cur_H - target_H) // 2 if cur_H > target_H else 0
                 start_w = (cur_W - target_W) // 2 if cur_W > target_W else 0
                 x = x[..., start_h:start_h + target_H, start_w:start_w + target_W]
@@ -202,22 +187,11 @@ class CropResizeDisplacePadLayer(nn.Module):
         return x
 
 # ====== Air Diffraction Calculation ======
-"""
-這段程式碼模擬的是：給定一個以 dx 為取樣解析度的波前（E），這個波前在空氣中傳播距離 z 後，到達前方某一平面時的波場分布。
-重點觀念：
-無限長的平面波之所以看起來沒有繞射，是因為都會有其他部分進行相消。如果我們只注意有限區域，其他部分視作被遮擋，繞射的情況就會出現
-| 可能修正方法               | 效果                                 |
-| -----------------------   | ------------------------------------ |
-| 降低 `dx`                 | 增加 Nyquist frequency，降低 aliasing |
-| 增加 `num_size`（區域大小）| 降低邊界效應與頻率截斷誤差              |
-| 初始波前 band-limiting     | 確保不超過模擬頻率範圍                 |
-| 使用 zero-padding         | 緩解邊界效應，讓 FFT 更精確            |
-| 使用 spectral method 判斷誤差 | 頻譜分析可以幫你預估保留了多少能量   |
 
-"""
+
 class DiffractiveLayer(nn.Module):
     """
-    用 angular spectrum 模擬在空氣中的傳播
+    Using angular spectrum method to simulate free space propagation
     """
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                 pad_factor=1, window=None, mask_evanescent=False, reverse_z=False):
@@ -227,55 +201,54 @@ class DiffractiveLayer(nn.Module):
         self.wl = 2.998e8 / frequency  # wavelength = light speed / frequency (m)
         self.z = z  # distance between two layers (m)
         self.n = refractive_index
-        self.pad_factor = pad_factor  # zero-padding 倍數
+        self.pad_factor = pad_factor  # zero-padding
         self.window = window
-        self.mask_evanescent = mask_evanescent  # 是否遮掉 evanescent
-        self.reverse_z = reverse_z  # 是否反向傳播 (-z)
+        self.mask_evanescent = mask_evanescent  # calculation evanescent
+        self.reverse_z = reverse_z  # backward propagation: (-z)
 
         print(num_size)
         # ==============================================
-        # Step 1. 空間頻率軸
+        # Step 1. 
         # ==============================================
         fx = np.fft.fftshift(np.fft.fftfreq(self.size * self.pad_factor, d=self.dx))
         fxx, fyy = np.meshgrid(fx, fx)
 
         # ==============================================
-        # Step 2. 波數分量
+        # Step 2. wave number
         # ==============================================
         kx = 2 * np.pi * fxx
         ky = 2 * np.pi * fyy
-        k = 2 * np.pi * self.n / self.wl  # 總波數
+        k = 2 * np.pi * self.n / self.wl 
 
         # ==============================================
-        # Step 3. 縱向分量 kz
+        # Step 3. kz
         # ==============================================
         argument = k**2 - kx**2 - ky**2
         tmp = np.sqrt(np.abs(argument))
         kz = np.where(argument >= 0, tmp, 1j * tmp)
 
         # ==============================================
-        # Step 4. 傳播相因子
+        # Step 4. propagation
         # ==============================================
         if self.reverse_z:
             H = np.exp(-1j * kz * self.z)
-            H[argument < 0] = 0.0  # 避免 evanescent 爆炸
+            H[argument < 0] = 0.0  # prevent evanescent error
         else:
             H = np.exp(1j * kz * self.z)
             if self.mask_evanescent:
                 H[argument < 0] = 0.0
 
         self.H = torch.from_numpy(H.astype(np.complex64)).to(device)
-        # Step 1~4這幾步就像是在製作一個濾鏡 (Filter)。這個濾鏡 self.H 的作用是：告訴光場中每一個頻率成分，「你在這段 z 距離的飛行中，相位需要轉動多少」
 
 
         # ==============================================
-        # Step 5. aliasing 檢查
+        # Step 5. aliasing check
         # ==============================================
         if self.dx > self.wl / 2:
-            print(f"⚠️ Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, 可能 aliasing")
+            print(f"Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, could aliasing")
 
     def forward(self, E):
-        # 確保 tensor
+        # make sure it is tensor
         if isinstance(E, np.ndarray):
             E = torch.from_numpy(E).to(device)
         E = E.to(torch.complex64)
@@ -290,13 +263,13 @@ class DiffractiveLayer(nn.Module):
             else:
                 E = torch.nn.functional.pad(E, (pad, pad, pad, pad), value=0.0)
 
-        # Step B. 傅立葉域傳播
+        # Step B. 
         F = torch.fft.fftshift(torch.fft.fft2(E))
         print(F.size())
         print(self.H.size())
         propagated = torch.fft.ifft2(torch.fft.ifftshift(F * self.H))
 
-        # Step C. 還原原始大小
+        # Step C. 
         if self.pad_factor > 1:
             if self.window == "hann":
                 window = torch.hann_window(propagated.shape[-1], device=propagated.device)
@@ -310,19 +283,17 @@ class DiffractiveLayer(nn.Module):
 
 '''class DiffractiveLayer(nn.Module): 
     """
-    增加 attenuation 的 angular spectrum 模擬
+    Adding attenuation in angular spectrum method 
     """
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2004e12, z=0.1, refractive_index=1, 
                 pad_factor=4, keep_pad=False, mask_evanescent=False, reverse_z=False, multi_step=1, eps=1e-3,
                 alpha_global=0.0, beta_freq=0.0, use_geom_atten=False):
         """
-        衰減項說明:
-        1. alpha_global: 全域衰減係數 (m^-1)，傳播距離 z 時因子為 exp(-alpha_global * z)
-            與空氣吸收有關(太赫茲波段嚴重且水蒸氣影響大): 常用 1~10(m**-1)
-        2. beta_freq: 高頻衰減係數 (m^-1)，對應 exp(-beta_freq * (kx^2+ky^2) * z)
-            與儀器建模有關(可能原因: 1.光學系統有限 NA 2.偏離軸的波能量效率下降 3.散射或鏡頭成像限制): 常用 1e-7
-        3. use_geom_atten: 是否開啟幾何 1/z 衰減
-            Angular spectrum 本質上是平面波分解，所以沒有自動包含這個 1/z 幾何衰減。
+        1. alpha_global: attenuation in air (m^-1): exp(-alpha_global * z)
+            usually use 1~10(m**-1)
+        2. beta_freq: high frequency attenuation (m^-1): exp(-beta_freq * (kx^2+ky^2) * z)
+            usually use 1e-7
+        3. use_geom_atten: geometric 1/z attenuation
         """
         super().__init__()
         self.dx = dx
@@ -334,16 +305,16 @@ class DiffractiveLayer(nn.Module):
         self.keep_pad = keep_pad
         self.mask_evanescent = mask_evanescent
         self.reverse_z = reverse_z
-        self.multi_step = multi_step   # 拆成幾步傳播
-        self.eps = eps  # evanescent 判斷閾值
+        self.multi_step = multi_step   
+        self.eps = eps  # evanescent epsilon
 
-        # 衰減參數
+        # attenuation parameter
         self.alpha_global = alpha_global
         self.beta_freq = beta_freq
         self.use_geom_atten = use_geom_atten
 
         # ======================================================
-        # Step 1. 建立頻率軸
+        # Step 1. 
         # ======================================================
         fx = np.fft.fftshift(np.fft.fftfreq(self.size * self.pad_factor, d=self.dx))  
         fxx, fyy = np.meshgrid(fx, fx)
@@ -352,28 +323,20 @@ class DiffractiveLayer(nn.Module):
         self.kx = 2 * np.pi * fxx
         self.ky = 2 * np.pi * fyy
 
-        # Step 3. 總波數
+        # Step 3. k
         self.k = 2 * np.pi * self.n / self.wl
 
-        # Step 4. 縱向分量
+        # Step 4. kz
         argument = self.k**2 - self.kx**2 - self.ky**2
-        # ---------- 在 __init__ 中（建立 numpy 資料後，轉成 torch 前） ----------
-        # 建議保留 numpy 的高精度運算，但在丟入 torch 前轉 dtype
 
-        # 先把 tmp, kx, ky, argument 等 cast 到 float32 / complex64 最後形式
-        # 1) 確保 tmp 是 float32（或在最後再轉）
         tmp = np.sqrt(np.abs(argument)).astype(np.float32)
 
-        # 2) 建立 kz：對於 argument>=0 用實數 tmp，否則用 1j*tmp
-        #    先用 float32 tmp，再製作 complex64 結果
         kz = np.where(argument >= 0, tmp, 1j * tmp).astype(np.complex64)
 
-        # 3) is_evan, alpha, freq_decay 轉成 float32
         is_evan = (argument < 0)
         alpha = np.where(is_evan, np.real(kz), 0.0).astype(np.float32)
         freq_decay = (self.kx**2 + self.ky**2).astype(np.float32)
 
-        # 4) 最後把 numpy -> torch，並指定 dtype/device 正確
         self.kz_torch = torch.from_numpy(kz).to(device=device, dtype=torch.complex64)
         self.alpha_torch = torch.from_numpy(alpha).to(device=device, dtype=torch.float32)
         self.is_evan_torch = torch.from_numpy(is_evan.astype(np.float32)).to(device=device, dtype=torch.float32)
@@ -381,13 +344,12 @@ class DiffractiveLayer(nn.Module):
 
         # dx check
         if self.dx > self.wl / 2:
-            print(f"⚠️ Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, 可能 aliasing")
+            print(f"Warning: dx={self.dx*1e3:.3f} mm > λ/2={self.wl/2*1e3:.3f} mm, could aliasing")
 
     def forward(self, E):
         if isinstance(E, np.ndarray):
             E = torch.from_numpy(E).to(device)
 
-        # padding: 注意 F.pad 不支援 complex，若是 complex 要分開 pad real/imag（或先作 real/imag pad）
         if self.pad_factor > 1:
             pad = (self.size * (self.pad_factor - 1)) // 2
             if torch.is_complex(E):
@@ -403,7 +365,7 @@ class DiffractiveLayer(nn.Module):
             z_rem = self.z - z_done - dz
 
             # ------------------------------
-            # Step A. 建立傳播因子 (含衰減)
+            # Step A. 
             # ------------------------------
             if self.reverse_z:
                 H = torch.exp(-1j * self.kz_torch * dz)
@@ -416,25 +378,24 @@ class DiffractiveLayer(nn.Module):
                     keep = ((1 - self.is_evan_torch) > 0) | (atten >= self.eps)
                     H = H * keep
                 
-                """# 全域衰減（你原本的做法保留，但確保用 tensor）
+                """
                 if self.alpha_global > 0:
                     H = H * torch.exp(torch.tensor(-self.alpha_global * dz, dtype=H.dtype, device=H.device))
 
-                # 高頻衰減
+                # high frequency attenuation
                 if self.beta_freq > 0:
                     H = H * torch.exp(-self.beta_freq * self.freq_decay_torch * dz)"""
 
             # ------------------------------
-            # Step B. 頻域傳播
+            # Step B. 
             # ------------------------------
-            c_fft = torch.fft.fftshift(torch.fft.fft2(E, dim=(-2, -1)))  # 改用norm="ortho"幾乎沒有影響
+            c_fft = torch.fft.fftshift(torch.fft.fft2(E, dim=(-2, -1)))  
             angular_spectrum = torch.fft.ifft2(torch.fft.ifftshift(c_fft * H))
 
             E = angular_spectrum
             z_done += dz
 
-            # 幾何擴散 (controlled, avoid division-by-small)
-            if self.use_geom_atten and z_done > 0: # 盡量不要用幾何衰減或只在最後一步用(容易讓數值爆炸或不穩定)
+            if self.use_geom_atten and z_done > 0: 
                 # MODIFIED: use 1/sqrt(z) (less aggressive than 1/z), prevent tiny z causing huge factors
                 #           and ensure tensor dtype/device matching E, clamp maximum factor
                 eps_z = 1e-9  # floor to avoid division by zero
@@ -446,11 +407,10 @@ class DiffractiveLayer(nn.Module):
                 E = E * geom_factor  # MODIFIED
 
             # ------------------------------
-            # Step C. 動態裁切 (保留 ≥99% 能量)
+            # Step C. 
             # ------------------------------
             E = self._crop_and_pad(E, energy_frac=0.99)
 
-        # 最後回傳裁切後大小
         if self.pad_factor > 1 and self.keep_pad == False:
             start = pad
             end = start + self.size
@@ -460,60 +420,49 @@ class DiffractiveLayer(nn.Module):
     
     def _crop_and_pad(self, E, energy_frac=0.99, target_shape=None, margin_pix=10):
         """
-        裁切到 >= energy_frac 的能量再 pad 回 target_shape（確保回填後尺寸**精確**等於 target_shape）。
         - E: torch tensor (complex or real) shape (H,W)
-        - target_shape: tuple (H_target, W_target). 若 None，則用當前 E 的 shape（不改變）
-        - 回傳值 dtype/device 與輸入 E 一致。
+        - target_shape: tuple (H_target, W_target). 
         """
-        # 目標尺寸
         H_target, W_target = (E.shape[-2], E.shape[-1]) if target_shape is None else tuple(target_shape)
 
-        # 強度（以 numpy 做排序以節省實作量；若需效率可改成 torch 實作）
         I_np = (E.abs()**2).detach().cpu().numpy()
         B, C, H, W = I_np.shape
         cy, cx = H // 2, W // 2
 
-        # 半徑格
         y = np.arange(H) - cy # y = [-cy, -cy+1, -cy+2, ...]
         x = np.arange(W) - cx
         X, Y = np.meshgrid(x, y)
         R2 = X**2 + Y**2
 
-        # 由內到外累積能量
-        idx = np.argsort(R2.ravel()) # 把所有 pixel 按由小到大的半徑排序，idx 為排序後的一維索引陣列
-        cumulative = np.cumsum(I_np.ravel()[idx]) # 由半徑小到大加總
-        total = cumulative[-1] # 總能量
+        idx = np.argsort(R2.ravel())
+        cumulative = np.cumsum(I_np.ravel()[idx])
+        total = cumulative[-1] # total energy
         target = energy_frac * total
         cut_idx = np.searchsorted(cumulative, target)
         cut_idx = min(cut_idx, len(idx)-1)
 
         r2_target = R2.ravel()[idx[cut_idx]]
-        r = int(np.ceil(np.sqrt(r2_target))) + margin_pix # 因為切成正方形，預留 10 pixels，以免少於99%
+        r = int(np.ceil(np.sqrt(r2_target))) + margin_pix 
 
-        # clamp r 以避免超出邊界（保證取 slice 時不會用到負索引）
         r = min(r, cy, cx, H - cy - 1, W - cx - 1)
 
         y0, y1 = cy - r, cy + r
         x0, x1 = cx - r, cx + r
 
-        # 若意外 y1<=y0 或 x1<=x0（極端情況），直接回傳原圖
         if y1 <= y0 or x1 <= x0:
             return E
         
         E_crop = E[..., y0:y1, x0:x1]
         newH, newW = E_crop.shape[-2], E_crop.shape[-1]
 
-        # 計算非對稱 padding，保證最終尺寸 EXACT 等於 target
         pad_top = (H_target - newH) // 2
         pad_bottom = H_target - newH - pad_top
         pad_left = (W_target - newW) // 2
         pad_right = W_target - newW - pad_left
 
-        # 若需要填回的量為負 (代表 crop 後比 target 大)，就不做 crop，直接回傳原始 E
         if pad_top < 0 or pad_bottom < 0 or pad_left < 0 or pad_right < 0:
             return E
 
-        # pad 支援 complex：對 real/imag 分別 pad
         if torch.is_complex(E_crop):
             real = torch.nn.functional.pad(E_crop.real, (pad_left, pad_right, pad_top, pad_bottom))
             imag = torch.nn.functional.pad(E_crop.imag, (pad_left, pad_right, pad_top, pad_bottom))
@@ -521,16 +470,14 @@ class DiffractiveLayer(nn.Module):
         else:
             E_new = torch.nn.functional.pad(E_crop, (pad_left, pad_right, pad_top, pad_bottom))
 
-        # 確保尺寸正確
         assert E_new.shape[-2] == H_target and E_new.shape[-1] == W_target, 
             f"pad failed: got {E_new.shape[-2:]} expected {(H_target, W_target)}"
 
-        # 保持 device 與原始 E 一致
         return E_new.to(E.device)'''
 
 class LensLayer(nn.Module):
     """
-    模擬 lens 的 layer
+    Simulate lens layer
     """
     def __init__(self, focal_length, dx, num_size, wavelength,
                 pupil_type=None, pupil_radius=None, pupil_width=None,
@@ -545,39 +492,38 @@ class LensLayer(nn.Module):
         self.frame_outer = frame_outer
 
         k = 2*np.pi / self.wl
-        # 以中心為0的座標（公尺）
         x = (np.arange(self.N) - self.N/2) * self.dx
         X, Y = np.meshgrid(x, x)
 
         if phase_model == "exact":
-            # 精確球面相位
+            # Spherical lens phase
             if mode == "backward":
                 H_lens = np.exp(1j * k * (np.sqrt(X**2 + Y**2 + self.f**2) - self.f))
             else:
                 H_lens = np.exp(-1j * k * (np.sqrt(X**2 + Y**2 + self.f**2) - self.f))
         else:
-            # 傳統拋物近似
+            # Paraxial lens phase
             if mode == "backward":
                 H_lens = np.exp(1j * k * (X**2 + Y**2) / (2*self.f))
             else: 
                 H_lens = np.exp(-1j * k * (X**2 + Y**2) / (2*self.f))
 
-        # pupil（可關閉、圓形或方形）
+        # pupil shape
         if pupil_type == "circular":
-            assert pupil_radius is not None, "請設定 pupil_radius（m）"
+            assert pupil_radius is not None, "set pupil_radius"
             P = ((X**2 + Y**2) <= (pupil_radius**2)).astype(np.float32)
         elif pupil_type == "square":
-            assert pupil_width is not None, "請設定 pupil_width（m）"
+            assert pupil_width is not None, "set pupil_width"
             half = pupil_width/2
             P = ((np.abs(X) <= half) & (np.abs(Y) <= half)).astype(np.float32)
         else:
             P = np.ones_like(X, dtype=np.float32)
 
-        # outside 選項
+        # outside the lens frame
         if outside == "one":
-            self.H = H_lens * P + (1 - P)   # 外面=1
+            self.H = H_lens * P + (1 - P)   # set outside = 1
         else:
-            self.H = H_lens * P             # 外面=0（預設）
+            self.H = H_lens * P             # set outside = 0
 
         if frame == True:
             frame_mask = (((X**2 + Y**2) >= (frame_inner**2)) & ((X**2 + Y**2) <= (frame_outer**2))).astype(np.float32)
@@ -590,19 +536,7 @@ class LensLayer(nn.Module):
 # ======= Interface Interaction Calculation ====== 
 class FresnelInterface(nn.Module):
     """
-    擴充版 FresnelInterface 支援： 
-    - 偏振分離計算（TE/TM） : 同時考慮兩種偏振態的 Fresnel 係數。
-    - 全反射處理（虛數透射角）: 若入射角超過臨界角，自動產生虛數的折射角，保留反射波。
-    - 複數折射率（模擬吸收介質）: 模擬吸收介質或金屬等材料（e.g. 𝑛=1.5+0.2𝑖）。
-    - 選擇性保留反射波 : 你可選擇是否返回反射波（如干涉模擬時很有用）。
-        
-    參數說明：
-    dx                : 空間解析度（每點距離，m）
-    num_size          : 點陣大小（如128表示128x128）
-    n1, n2            : 折射率（可為複數）
-    frequency         : 波頻率（Hz）
-    keep_reflection   : 是否保留反射波
-    complex_index     : 是否使用複數折射率
+    Polariztion simulation
     """
     def __init__(self, dx=0.00075, num_size=128, frequency=0.2e12, keep_reflection=False, complex_index=False, n1=1, n2=1.7):
         super().__init__()
@@ -611,53 +545,45 @@ class FresnelInterface(nn.Module):
         self.n1 = n1 if complex_index else complex(n1, 0.0)
         self.n2 = n2 if complex_index else complex(n2, 0.0)
         self.keep_reflection = keep_reflection
-        self.wl = 2.998e8 / frequency  # 真空波長
-        self.k0 = 2 * np.pi / self.wl  # 真空波數
+        self.wl = 2.998e8 / frequency  # 
+        self.k0 = 2 * np.pi / self.wl  # 
 
-        # 建立頻率網格
         fx = np.fft.fftshift(np.fft.fftfreq(self.size, d=self.dx))
         fxx, fyy = np.meshgrid(fx, fx)
         kx = 2 * np.pi * fxx
         ky = 2 * np.pi * fyy
         k_perp = np.sqrt(kx**2 + ky**2)
 
-        # 入射角的 sin(theta_i)
         sin_theta_i = k_perp / (self.k0 * abs(self.n1))
         sin_theta_i = np.clip(sin_theta_i, 0, 1)
 
         # cos(theta_i), sin(theta_t), cos(theta_t)
         cos_theta_i = np.sqrt(1 - sin_theta_i**2 + 0j)
         sin_theta_t = (self.n1 / self.n2) * sin_theta_i
-        cos_theta_t = np.sqrt(1 - sin_theta_t**2 + 0j)  # 虛數表示全反射
+        cos_theta_t = np.sqrt(1 - sin_theta_t**2 + 0j)  
 
-        # Fresnel TE (s) 和 TM (p) 偏振反射與透射係數
+        # Fresnel TE (s) & TM (p)
         rs = (self.n1 * cos_theta_i - self.n2 * cos_theta_t) / (self.n1 * cos_theta_i + self.n2 * cos_theta_t)
         ts = (2 * self.n1 * cos_theta_i) / (self.n1 * cos_theta_i + self.n2 * cos_theta_t)
 
         rp = (self.n2 * cos_theta_i - self.n1 * cos_theta_t) / (self.n2 * cos_theta_i + self.n1 * cos_theta_t)
         tp = (2 * self.n1 * cos_theta_i) / (self.n2 * cos_theta_i + self.n1 * cos_theta_t)
 
-        # 將 rs, rp, ts, tp 組成平均強度反射率與透射率
+        # average intensity from rs, rp, ts, tp
         R = 0.5 * (np.abs(rs)**2 + np.abs(rp)**2)
         T = 0.5 * (np.abs(ts)**2 + np.abs(tp)**2)
 
-        self.R = torch.from_numpy(R).to(torch.float32)  # 強度反射率
-        self.T = torch.from_numpy(T).to(torch.float32)  # 強度透射率
+        self.R = torch.from_numpy(R).to(torch.float32)  
+        self.T = torch.from_numpy(T).to(torch.float32)
 
-        # 若保留複數振幅的反射波與透射波
         self.rs = torch.from_numpy(rs).to(torch.complex64)
         self.rp = torch.from_numpy(rp).to(torch.complex64)
         self.ts = torch.from_numpy(ts).to(torch.complex64)
         self.tp = torch.from_numpy(tp).to(torch.complex64)
 
     def forward(self, E):
-        """
-        輸入 E 是一個空間波前（複數值的張量），尺寸為 (B, H, W) 或 (H, W)
-        根據設定回傳透射波，必要時也可同時回傳反射波
-        """
         E_f = torch.fft.fftshift(torch.fft.fft2(E))
 
-        # 計算複數振幅平均的透射分量（可拓展為偏振分離）
         t_avg = 0.5 * (self.ts + self.tp).to(E.device)
         r_avg = 0.5 * (self.rs + self.rp).to(E.device)
 
@@ -673,29 +599,11 @@ class FresnelInterface(nn.Module):
             return E_out
 
 class RadialAttenuationLayer(nn.Module):
-    """
-    對複數場 E 做徑向衰減，避免邊緣數值過大。
-    參數:
-    ----------
-    E : np.ndarray 或 torch.Tensor, complex
-        傳播後的場
-    R0 : float, optional
-        衰減開始的參考半徑 (pixel)。若 None，預設為圖像一半寬度。
-    exponent : float
-        控制衰減曲線陡峭度，越大越陡
-    min_factor : float
-        最遠處的最小強度因子，避免完全為 0
-
-    回傳:
-    ----------
-    E_out : same type as E
-        徑向衰減後的場
-    """
     def __init__(self, R0_ratio=0.8, exponent=2, min_factor=0):
         super().__init__()
         self.R0_ratio = R0_ratio
-        self.exponent = exponent # 衰減速度
-        self.min_factor = min_factor # 邊界保留的最低強度
+        self.exponent = exponent
+        self.min_factor = min_factor 
         
     def forward(self, E):
         H, W = E.shape[-2:]
@@ -703,7 +611,7 @@ class RadialAttenuationLayer(nn.Module):
         y = torch.arange(H, device=E.device) - cy
         x = torch.arange(W, device=E.device) - cx
         X, Y = torch.meshgrid(x, y, indexing='xy')
-        R = torch.sqrt(X**2 + Y**2) # 每個pixel到中心的距離
+        R = torch.sqrt(X**2 + Y**2) 
         R0 = self.R0_ratio * R.max()
 
         attenuation = torch.ones_like(R)
@@ -715,13 +623,13 @@ class RadialAttenuationLayer(nn.Module):
 
 class SensorLayer(nn.Module):
     """
-    模擬 sensor 裁切與翻轉的 layer
+    Simulation of sensor end, crop and flip
     """
     def __init__(self, crop_size=(288, 384), displacement=(0, 0), bin_size=1, flip=False):
         """
-        crop_size: 裁切大小 (pixels)
-        bin_size: 像素合併 (模擬binning)
-        flip: 是否模擬相機倒像 (上下+左右翻轉)
+        crop_size: crop size
+        bin_size: pixel binning size
+        flip: flip image
         """
         super().__init__()
         self.crop_size = crop_size
@@ -730,46 +638,34 @@ class SensorLayer(nn.Module):
         self.flip = flip
 
     def forward(self, E):
-        """
-        E: 輸入場 (complex tensor, shape = [H, W])
-        回傳裁切/合併後的場 (crop_size x crop_size)
-        """
         B, C, H, W = E.shape
         crop_h, crop_w = self.crop_size
         hh, hw = crop_h // 2, crop_w // 2
         center_h, center_w = H // 2, W // 2
-
         disp_h, disp_w = self.displacement
 
-        # --- Step 1: 裁切區域 ---
-        E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h, center_w - hw + disp_w:center_w + hw + disp_w]
+        E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h,
+                    center_w - hw + disp_w:center_w + hw + disp_w]
 
-        # --- Step 2: 像素 binning (平均合併區塊) ---
-        if self.bin_size > 1:
-            # E_crop shape = [..., crop_size, crop_size]
-            E_crop = E_crop.unfold(-2, self.bin_size, self.bin_size).unfold(-1, self.bin_size, self.bin_size)
-            # shape [..., new_size, bin_size, new_size, bin_size]
-            E_crop = E_crop.mean(dim=(-3, -1))  # 對 bin_size 做平均
-
-
-        # --- Step 3: 是否翻轉 (模擬相機倒像) ---
-        if self.flip:
-            E_crop = torch.flip(E_crop, dims=[-2, -1])
-
-        # --- Step 4: 轉換到Intensity(相機感受到的是能量、熱) ---
         I_crop = torch.abs(E_crop) ** 2
+        if self.bin_size > 1:
+            bin_size = self.bin_size
+            out_h = I_crop.shape[-2] // bin_size
+            out_w = I_crop.shape[-1] // bin_size
+            I_crop = I_crop[..., :out_h * bin_size, :out_w * bin_size]
+            I_crop = I_crop.reshape(B, C, out_h, bin_size, out_w, bin_size).mean(dim=(3, 5))
+
+        if self.flip:
+            I_crop = torch.flip(I_crop, dims=[-2, -1])
+
         print(torch.min(I_crop))
         print(torch.max(I_crop))
-        I_crop = I_crop.to(torch.float32)
-
-        # 回傳 intensity 而不是 complex
-        return I_crop
-
-
+        return I_crop.to(torch.float32)
+    
 # ====== Sensor Noise Simulation ======
 class SensorNoiseLayer(nn.Module):
     """
-    簡易的 sensor noise 模擬
+    Simple sensor noise simulation
     """
     def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
         """
@@ -789,7 +685,7 @@ class SensorNoiseLayer(nn.Module):
         self.gray_ratio = gray_ratio
         self.noise_std = noise_std
 
-        # 建立 differentiable Gaussian kernel
+        # differentiable Gaussian kernel
         self.register_buffer('gaussian_kernel', self._create_gaussian_kernel())
 
     def forward(self, x):
@@ -816,7 +712,7 @@ class SensorNoiseLayer(nn.Module):
         kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
         kernel = kernel / kernel.sum()
         kernel = kernel.view(1, 1, k, k)  
-        kernel = kernel.repeat(3, 1, 1, 1)  # RGB 每個 channel 卷積
+        kernel = kernel.repeat(3, 1, 1, 1) 
         return kernel
 
     def _gaussian_blur(self, x):
@@ -827,7 +723,7 @@ class SensorNoiseLayer(nn.Module):
 # ====== Material Phase Control ======
 class MaterialLayer(nn.Module):
     """
-    ONN layer 模擬
+    ONN layer simulation
     """
     def __init__(self, num_size=128, block_size=(1, 1), return_phases=True):
         super().__init__()
@@ -836,26 +732,22 @@ class MaterialLayer(nn.Module):
         h_small = math.ceil(num_size / block_size[0])
         w_small = math.ceil(num_size / block_size[1])
 
-        # 初始化相位 (小網格)
         init_phase = 2 * np.pi * np.random.rand(h_small, w_small).astype(np.float32)
         self.phase = nn.Parameter(torch.from_numpy(init_phase))
 
     def forward(self, x):
         """
-        x: (B, C, H, W) tensor，可以是 real 或 complex
-        block_size: (block_h, block_w)，每個 phase 對應多少輸入 pixel
+        x: (B, C, H, W) tensor, could be real or complex
+        block_size: (block_h, block_w), multi-phase to one pixel
         """
         B, C, H, W = x.shape
         block_h, block_w = self.block_size
 
-        # 放大相位網格成 full size，對應 floor(i/block_h), floor(j/block_w)
         phase_full = self.phase.repeat_interleave(block_h, dim=0).repeat_interleave(block_w, dim=1) # 複製
-        phase_full = phase_full[:H, :W]  # 裁切到輸入大小
+        phase_full = phase_full[:H, :W] 
 
-        # 建立複數相位遮罩
         phase_mask = torch.exp(1j * phase_full).to(x.device)
 
-        # 相乘（自動 broadcast 到 B, C）
         if self.return_phases == True:
             #print(f"Max: {torch.max(self.phase)}, Min: {torch.min(self.phase)}")
             return x * phase_mask, self.phase
@@ -865,12 +757,12 @@ class MaterialLayer(nn.Module):
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
     """
-    架好的 ONN 範例
+    Simple ONN structure sample
     """
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
-        self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
-        self.layer_names = []  # 存每一層的「語意名字」
+        self.layers = nn.ModuleList()  # Module list 
+        self.layer_names = []  # Mudule name
         
         # SourceLayer
         use_input           = config["use_input"]
@@ -894,7 +786,7 @@ class ONN(nn.Module):
         dx              = config["dx"]
         num_size        = config["num_size"]
         frequency       = config["frequency"]
-        z_values        = config["z"]  # 可能是 float 或 list
+        z_values        = config["z"]  # e.g. [0.2, 0.3]
         n               = config["refractive_index"]
         pad_factor      = config["pad_factor"]
         window          = config["window"]
@@ -945,7 +837,7 @@ class ONN(nn.Module):
         
 
         # -------------------------------
-        # 建立 layers
+        # Construct layers
         # -------------------------------
         total_index = 1
         resize_pad_layer_index = 1
@@ -967,7 +859,6 @@ class ONN(nn.Module):
         resize_pad_layer_index += 1
         total_index += 1
 
-        # 每一層使用不同的 z (如果超出長度，就循環使用)
         z_values_index = 0
         for z_values_index in range(num_layers):
             self.layers.append(
@@ -1020,9 +911,9 @@ class ONN(nn.Module):
 
     def forward(self, x):
         # ======        
-        # 若 return_phases=True，則除了輸出結果外，也會回傳所有 MaterialLayer 的相位參數。
+        # return_phases=True, output phase of every material layer
         # ======
-        phase_list = []  # 用來收集所有 MaterialLayer 的 phase
+        phase_list = [] 
 
         for layer in self.layers:
             if self.return_phases and isinstance(layer, MaterialLayer):

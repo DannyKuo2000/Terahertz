@@ -147,7 +147,7 @@ class ONN(nn.Module):
         total_index += 1
 
         self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                                       center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+                                    center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
         self.layer_names.append(f"{total_index}_SourceLayer")
         total_index += 1
 
@@ -161,7 +161,7 @@ class ONN(nn.Module):
         for z_values_index in range(num_layers):
             self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+                                pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
             )
             self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
             diffractive_layer_index += 1
