@@ -133,6 +133,9 @@ class SkipFusion(nn.Module):
 class Restormer(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.padding_factor = config["padding_factor"]
+        self.use_input_padding = config.get("use_input_padding", True)
+        self.output_crop_size = config.get("output_crop_size", None)
         self.inp_channels  = config["inp_channels"]
         self.out_channels  = config["out_channels"]
         dim                = config["embed_dim"]
@@ -172,8 +175,71 @@ class Restormer(nn.Module):
 
         self.output   = nn.Conv2d(dim, self.out_channels, kernel_size=3, padding=1)
 
+    # padding to ensure downsampling
+    def _pad_input(self, x):
+        """
+        Pad input so H and W are divisible by 8.
+        Returns:
+            x_pad
+            pad_info = (pad_left, pad_right, pad_top, pad_bottom, H, W)
+        """
+        H, W = x.shape[-2:]
+
+        factor = self.padding_factor
+        pad_h = (factor - H % factor) % factor
+        pad_w = (factor - W % factor) % factor
+
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+
+        if pad_h != 0 or pad_w != 0:
+            x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom), mode="reflect")
+
+        return x, (pad_left, pad_right, pad_top, pad_bottom, H, W)
+    
+    # cropping to ensure loss calculation
+    def _crop_output(self, x, pad_info=None, crop_size=None):
+        """
+        First remove padding, then optionally center-crop to a target size.
+        """
+        if pad_info is not None:
+            pad_left, pad_right, pad_top, pad_bottom, H, W = pad_info
+            if not (pad_top == pad_bottom == pad_left == pad_right == 0):
+                x = x[:, :, pad_top:pad_top + H, pad_left:pad_left + W]
+
+        if crop_size is None:
+            return x
+
+        if isinstance(crop_size, int):
+            target_h = target_w = crop_size
+        else:
+            target_h, target_w = crop_size
+
+        _, _, H, W = x.shape
+        if target_h > H or target_w > W:
+            raise ValueError(
+                f"crop_size={crop_size} is larger than current tensor size {(H, W)}"
+            )
+
+        crop_top = (H - target_h) // 2
+        crop_left = (W - target_w) // 2
+        return x[:, :, crop_top:crop_top + target_h, crop_left:crop_left + target_w]
+
+
     def forward(self, x):
         inp = x  # ★ 用於全域殘差
+
+        # padding
+        if self.use_input_padding:
+            x, pad_info = self._pad_input(x)
+            inp_pad, _ = self._pad_input(inp)
+        else:
+            pad_info = None
+            inp_pad = inp
+
+
         x = self.patch_embed(x)
 
         enc1 = self.encoder1(x)                 # dim
@@ -193,5 +259,8 @@ class Restormer(nn.Module):
         out  = self.output(dec1)
         if self.with_residual and (self.inp_channels == self.out_channels):
             # 全域殘差：預測殘差 + 輸入
-            return out + inp
+            out = self._crop_output(out + inp_pad, pad_info, self.output_crop_size)
+            return out
+        
+        out = self._crop_output(out, pad_info, self.output_crop_size)
         return out

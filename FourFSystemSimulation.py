@@ -1,5 +1,5 @@
 # ======
-# This file is for real NMLab251205_measurement check 
+# 
 # ======
 import torch
 import torch.nn as nn
@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 import os
 from PIL import Image
-from model.opticalSimulation import CropResizeDisplacePadLayer, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
-from FourFSystemSimulation_config import ENCODER_CONFIG
+from model.opticalSimulation import CropResizeDisplacePad, DiffractiveLayer, LensLayer, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
+from FourFSystemSimulation_config_v2 import ENCODER_CONFIG
 
 # ====== Image Loader ======
 def load_image(path, cut=None, size=None):
@@ -66,166 +66,234 @@ def shift_image(img_array, shift):
 class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
-        self.layers = nn.ModuleList()  # 用 ModuleList 代替普通 list
-        self.layer_names = []  # 存每一層的「語意名字」
-        
+
+        self.layers = nn.ModuleList()
+        self.layer_names = []
+
         self.return_phases = False
 
-        # SourceLayer
-        use_input           = config["use_input"]
-        input               = config["input"]
-        mode_source         = config["mode_source"]
-        size_source         = config["size_source"]
-        sigma               = config["sigma"]
-        amplitude           = config["amplitude"]
-        center              = config["center"]
-        rotaion             = config["rotation"]
-        aspect_ratio        = config["aspect_ratio"]
-        crop_size_source    = config["crop_size_source"]
-        resize_size_source  = config["resize_size_source"]
-        pad_size_source     = config["pad_size_source"]
+        # =========================
+        # Config blocks
+        # =========================
+        transform_configs = config["transform_configs"]
+        diffractive_configs = config["diffractive_configs"]
+        lens_configs = config["lens_configs"]
+
+        # Source
+        use_input = config["use_input"]
+        input_path = config["input"]
+        mode_source = config["mode_source"]
+        created_size = config["created_size"]
         source_is_intensity = config["source_is_intensity"]
 
-        # CropResizeDisplacePadLayer
-        crop_size   = config["crop_size"]
-        resize_size = config["resize_size"]
-        pad_size    = config["pad_size"]
+        sigma = config["sigma"]
+        amplitude = config["amplitude"]
+        center = config["center"]
+        rotation = config["rotation"]
+        aspect_ratio = config["aspect_ratio"]
 
-        # DiffractiveLayer 
-        num_layers      = config["num_layers"]
-        dx              = config["dx"]
-        num_size_diffractive        = config["num_size_diffractive"]
-        frequency       = config["frequency"]
-        z_values        = config["z"]  # 可能是 float 或 list
-        n               = config["refractive_index"]
-        pad_factor      = config["pad_factor"]
-        window          = config["window"]
-        mask_evanescent = config["mask_evanescent"]
-        reverse_z       = config["reverse_z"]
+        crop_size_source = config["crop_size_source"]
+        resize_size_source = config["resize_size_source"]
+        displace_size_source = config["displace_size_source"]
+        pad_size_source = config["pad_size_source"]
 
-        # MaterialLayer
-        num_size_material = config["num_size_material"]
-        block_size = config["block_size"]
-        return_phases = config["return_phases"]
+        # Sensor
+        active_sensor = config["active_sensor"]
+        crop_size = config["crop_size"]
+        sensor_displacement = config["sensor_displacement"]
+        sensor_psf_enabled = config["sensor_psf_enabled"]
+        sensor_psf_sigma = config["sensor_psf_sigma"]
+        sensor_psf_kernel_size = config["sensor_psf_kernel_size"]
+        simulation_pitch = config["simulation_pitch"]
+        target_pitch = config["target_pitch"]
+        bin_size = config["bin_size"]
+        flip = config["flip"]
 
-        # LensLayer
+        # Noise
+        active_sensor_noise = config["active_sensor_noise"]
+        blur_kernel_size = config["blur_kernel_size"]
+        blur_sigma = config["blur_sigma"]
+        gray_mean = config["gray_mean"]
+        gray_sigma = config["gray_sigma"]
+        gray_ratio = config["gray_ratio"]
+        noise_std = config["noise_std"]
+
+        # Final process
+        self.gain = config["gain"]
+        self.bias = config["bias"]
+        self.noise_level = config["noise_level"]
+
+
+        # wavelength
         wavelength = config["wavelength"]
-        lens_configs = config["lens_configs"]
-        if len(z_values) != len(lens_configs) + 1:
+
+        # sanity check (4F constraint)
+        if len(diffractive_configs) != len(lens_configs) + 1:
             raise ValueError(
-                "4F config expects len(z) == len(lens_configs) + 1 "
-                "for object->lens1, lens-to-lens, and lens2->image propagation."
+                "4F system requires len(diffractive_configs) == len(lens_configs) + 1"
             )
 
-        # SensorLayer
-        active_sensor   = config["active_sensor"]
-        crop_size       = config["crop_size"]
-        bin_size        = config["bin_size"]
-        flip            = config["flip"]
-
-        # SensorNoiseLayer
-        active_sensor_noise = config["active_sensor_noise"]
-        blur_kernel_size    = config["blur_kernel_size"]
-        blur_sigma          = config["blur_sigma"]
-        gray_mean           = config["gray_mean"]
-        gray_sigma          = config["gray_sigma"]
-        gray_ratio          = config["gray_ratio"]
-        noise_std           = config["noise_std"]
-        
-        # -------------------------------
-        # 建立 layers
-        # -------------------------------
+        # =========================
+        # Layer indexing
+        # =========================
         total_index = 1
-        resize_pad_layer_index = 1
-        diffractive_layer_index = 1
-        material_layer_index = 0
-        len_layer_index = 1
-        z_values_index = 0
-        
-        # ==========================
-        self.layers.append(CropResizeDisplacePadLayer(resize_size=resize_size, pad_size=pad_size))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
+
+        # =========================
+        # Input transform
+        # =========================
+        t0 = transform_configs[0]
+        self.layers.append(
+            CropResizeDisplacePad(
+                crop_size=t0["crop_size"],
+                resize_size=t0["resize_size"],
+                displace=t0["displace_size"],
+                pad_size=t0["pad_size"],
+            )
+        )
+        self.layer_names.append(f"{total_index}_{t0['name']}")
         total_index += 1
 
-        self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                            center=center, rotation=rotaion, aspect_ratio=aspect_ratio, crop_size_source=crop_size_source,
-                            resize_size_source=resize_size_source, pad_size_source=pad_size_source, source_is_intensity=source_is_intensity))
+        # =========================
+        # Source
+        # =========================
+        self.layers.append(
+            SourceLayer(
+                use_input=use_input,
+                input=input_path,
+                mode=mode_source,
+                created_size=created_size,
+                source_is_intensity=source_is_intensity,
+                sigma=sigma,
+                amplitude=amplitude,
+                center=center,
+                rotation=rotation,
+                aspect_ratio=aspect_ratio,
+                crop_size_source=crop_size_source,
+                resize_size_source=resize_size_source,
+                displace_size_source=displace_size_source,
+                pad_size_source=pad_size_source,
+            )
+        )
         self.layer_names.append(f"{total_index}_SourceLayer")
         total_index += 1
 
-        for lens_config in lens_configs:
-            self.layers.append(
-                DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
-            )
-            self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-            z_values_index += 1
-            diffractive_layer_index += 1
-            total_index += 1
+        # =========================
+        # Optical chain (Diff + Lens)
+        # =========================
+        for i in range(len(lens_configs)):
 
+            diff_cfg = diffractive_configs[i]
+            lens_cfg = lens_configs[i]
+
+            # ---- diffraction ----
             self.layers.append(
-                LensLayer(
-                    focal_length=lens_config["focal_length"],
-                    dx=lens_config.get("dx", dx),
-                    num_size=lens_config.get("num_size", num_size_diffractive),
-                    wavelength=lens_config.get("wavelength", wavelength),
-                    pupil_type=lens_config.get("pupil_type"),
-                    pupil_radius=lens_config.get("pupil_radius"),
-                    pupil_width=lens_config.get("pupil_width"),
-                    phase_model=lens_config.get("phase_model", "exact"),
-                    mode=lens_config.get("mode", "forward"),
-                    outside=lens_config.get("outside", "one"),
-                    frame=lens_config.get("frame", False),
-                    frame_inner=lens_config.get("frame_inner", 0.02375),
-                    frame_outer=lens_config.get("frame_outer", 0.0254),
+                DiffractiveLayer(
+                    dx=diff_cfg["dx"],
+                    num_size=diff_cfg["num_size"],
+                    frequency=diff_cfg["frequency"],
+                    z=diff_cfg["z"],
+                    refractive_index=diff_cfg["refractive_index"],
+                    pad_factor=diff_cfg["pad_factor"],
+                    window=diff_cfg["window"],
+                    mask_evanescent=diff_cfg["mask_evanescent"],
+                    reverse_z=diff_cfg["reverse_z"],
                 )
             )
-            lens_name = lens_config.get("name", f"LensLayer{len_layer_index}")
-            self.layer_names.append(f"{total_index}_{lens_name}")
-            len_layer_index += 1
+            self.layer_names.append(f"{total_index}_{diff_cfg['name']}")
             total_index += 1
 
+            # ---- lens ----
+            self.layers.append(
+                LensLayer(
+                    focal_length=lens_cfg["focal_length"],
+                    dx=lens_cfg["dx"],
+                    num_size=lens_cfg["num_size"],
+                    wavelength=wavelength,
+                    pupil_type=lens_cfg["pupil_type"],
+                    pupil_radius=lens_cfg["pupil_radius"],
+                    pupil_width=lens_cfg["pupil_width"],
+                    phase_model=lens_cfg["phase_model"],
+                    mode=lens_cfg["mode"],
+                    outside=lens_cfg["outside"],
+                    frame=lens_cfg["frame"],
+                    frame_inner=lens_cfg["frame_inner"],
+                    frame_outer=lens_cfg["frame_outer"],
+                )
+            )
+            self.layer_names.append(f"{total_index}_{lens_cfg['name']}")
+            total_index += 1
+
+        # =========================
+        # Final diffraction
+        # =========================
+        diff_cfg = diffractive_configs[-1]
         self.layers.append(
-            DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                            pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+            DiffractiveLayer(
+                dx=diff_cfg["dx"],
+                num_size=diff_cfg["num_size"],
+                frequency=diff_cfg["frequency"],
+                z=diff_cfg["z"],
+                refractive_index=diff_cfg["refractive_index"],
+                pad_factor=diff_cfg["pad_factor"],
+                window=diff_cfg["window"],
+                mask_evanescent=diff_cfg["mask_evanescent"],
+                reverse_z=diff_cfg["reverse_z"],
+            )
         )
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
+        self.layer_names.append(f"{total_index}_{diff_cfg['name']}")
         total_index += 1
 
-        # Sensor / Noise
+        # =========================
+        # Sensor
+        # =========================
         if active_sensor:
-            self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
+            self.layers.append(
+                SensorLayer(
+                    crop_size=crop_size,
+                    sensor_displacement=sensor_displacement,
+                    sensor_psf_enabled=sensor_psf_enabled,
+                    sensor_psf_sigma=sensor_psf_sigma,
+                    sensor_psf_kernel_size=sensor_psf_kernel_size,
+                    simulation_pitch=simulation_pitch,
+                    target_pitch=target_pitch,
+                    bin_size=bin_size,
+                    flip=flip,
+                )
+            )
             self.layer_names.append(f"{total_index}_SensorLayer")
             total_index += 1
+
+        # =========================
+        # Noise
+        # =========================
         if active_sensor_noise:
-            self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
-                                                gray_mean=gray_mean, gray_sigma=gray_sigma,
-                                                gray_ratio=gray_ratio, noise_std=noise_std))
+            self.layers.append(
+                SensorNoiseLayer(
+                    blur_kernel_size=blur_kernel_size,
+                    blur_sigma=blur_sigma,
+                    gray_mean=gray_mean,
+                    gray_sigma=gray_sigma,
+                    gray_ratio=gray_ratio,
+                    noise_std=noise_std,
+                )
+            )
             self.layer_names.append(f"{total_index}_SensorNoiseLayer")
             total_index += 1
 
     def forward(self, x, return_intermediate=True):
-        # ======
-        # 若 return_phases=True，則除了輸出結果外，也會回傳所有 MaterialLayer 的相位參數。
-        # return_intermediate=True → 會同時回傳每層 output
-        # ======
         phase_list = []
-        outputs = []  # <--- 新增：存每層輸出
+        outputs = []
 
         for name, layer in zip(self.layer_names, self.layers):
 
-            # MaterialLayer 另外處理 phase
             if self.return_phases and isinstance(layer, MaterialLayer):
                 x, phase = layer(x)
                 phase_list.append(phase)
             else:
                 x = layer(x)
-
-            # 每層輸出都保存
+            x = x * self.gain + self.bias # !! temporary
             outputs.append((name, x.detach().clone()))
 
-        # 回傳三種形式
         if return_intermediate and self.return_phases:
             return x, phase_list, outputs
 
@@ -239,6 +307,7 @@ class ONN(nn.Module):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(device)
     os.makedirs(ENCODER_CONFIG["save_path"], exist_ok=True)
 
     path = ENCODER_CONFIG["image_path"]
@@ -255,8 +324,9 @@ if __name__ == "__main__":
 
     gain = ENCODER_CONFIG["gain"]
     noise_level = ENCODER_CONFIG["noise_level"]
+    bias = ENCODER_CONFIG["bias"]
 
-    # 印出每層的 output (shape)
+    # print the output of each layer (and shape)
     for name, out in all_outputs: # 測試
         print(name, out.shape)    
 
@@ -266,7 +336,7 @@ if __name__ == "__main__":
         else:
             img = out.squeeze()
         
-        img = img * gain
+        img = img * gain + bias
         noise = torch.randn_like(img) * noise_level
         img = img + noise
         img = torch.clamp(img, 0, 1)

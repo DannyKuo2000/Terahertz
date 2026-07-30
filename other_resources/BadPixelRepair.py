@@ -200,8 +200,8 @@ def parse_and_apply_commands(image, txt_path, psf_sigma=10.0, psf_amplitude=3, p
 # ==========================================================
 if __name__ == "__main__":
 
-    input_dir = "other_data/NVLab260130_averaged"
-    output_dir = "other_data/NVLab260130_fixed"
+    input_dir = "other_data/NVLab260612_averaged"
+    output_dir = "other_data/NVLab260612_fixed"
     txt_path = "other_resources/repair_commands.txt"
 
     os.makedirs(output_dir, exist_ok=True)

@@ -20,36 +20,36 @@ Experiments Relative parameters:
 lens frame: Newport M-LH-2A: https://www.newport.com/p/M-LH-2A
 laser lens: 1.55 µm BCX Lens
 """
+
 class SourceLayer(nn.Module):
     """
     Simulate real source pattern
     """
-    def __init__(self, use_input=True, input=None, mode="white", size_source=(128, 128),
+    def __init__(self, use_input=True, input=None, mode="white", created_size=(128, 128),
+                source_is_intensity=True,
                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
                 rotation=0.0, aspect_ratio=1.0,
-                crop_size_source=None, resize_size_source=None, pad_size_source=None,
-                source_is_intensity=True, new_size_source=None):
+                crop_size_source=None, resize_size_source=None, displace_size_source=None, pad_size_source=None):
         
         super().__init__()
-        self.use_input = use_input
-        self.input = input
-        self.mode = mode
-        self.size_source = size_source
-        self.source_is_intensity = source_is_intensity
-        if pad_size_source is None and new_size_source is not None:
-            pad_size_source = new_size_source
+        self.use_input = use_input  # use specific input image
+        self.input = input  # path of input image 
+        self.mode = mode  # default source modes
+        self.created_size = created_size  # size of default sources
+        self.source_is_intensity = source_is_intensity  # switch to E for angular spectrum
 
         # Gaussian beam parameter
         self.sigma = sigma
-        self.amplitude = amplitude
+        self.amplitude = amplitude 
         self.center = center
         self.rotation = rotation
         self.aspect_ratio = aspect_ratio
 
-        # Resize/pad layer
-        self.resize_pad = CropResizeDisplacePadLayer(
+        # Final transformation 
+        self.resize_pad = CropResizeDisplacePad(
             crop_size=crop_size_source,
             resize_size=resize_size_source,
+            displace=displace_size_source,
             pad_size=pad_size_source,
         )
 
@@ -69,7 +69,7 @@ class SourceLayer(nn.Module):
             return x * input_resized
 
         else:
-            H, W = self.size_source
+            H, W = self.created_size
 
             if self.mode == "white":
                 src = torch.ones((1, 1, H, W), dtype=x.dtype, device=device)
@@ -103,7 +103,7 @@ class SourceLayer(nn.Module):
             src_resized = self.resize_pad(src)
             return x * src_resized.to(device=device, dtype=x.dtype)
 
-class CropResizeDisplacePadLayer(nn.Module):
+class CropResizeDisplacePad(nn.Module):
     """
     Simulation of crop, resize, displace, pad
     """
@@ -141,7 +141,7 @@ class CropResizeDisplacePadLayer(nn.Module):
             else:
                 x = x[..., start_h:start_h + target_H, start_w:start_w + target_W]
             
-            print(x.shape)
+            #print(x.shape)
 
         # -------------------------
         # Resize
@@ -153,7 +153,7 @@ class CropResizeDisplacePadLayer(nn.Module):
                 x = torch.complex(real, imag)
             else:
                 x = F.interpolate(x, size=self.resize_size, mode=self.mode, align_corners=False)
-            print(x.shape)
+            #print(x.shape)
         # -------------------------
         # Displacement / Padding or Cropping ??pad_size
         # -------------------------
@@ -182,13 +182,11 @@ class CropResizeDisplacePadLayer(nn.Module):
                 start_h = (cur_H - target_H) // 2 if cur_H > target_H else 0
                 start_w = (cur_W - target_W) // 2 if cur_W > target_W else 0
                 x = x[..., start_h:start_h + target_H, start_w:start_w + target_W]
-            print(x.shape)
+            #print(x.shape)
         
         return x
 
 # ====== Air Diffraction Calculation ======
-
-
 class DiffractiveLayer(nn.Module):
     """
     Using angular spectrum method to simulate free space propagation
@@ -206,7 +204,7 @@ class DiffractiveLayer(nn.Module):
         self.mask_evanescent = mask_evanescent  # calculation evanescent
         self.reverse_z = reverse_z  # backward propagation: (-z)
 
-        print(num_size)
+        # print(num_size)
         # ==============================================
         # Step 1. 
         # ==============================================
@@ -265,8 +263,8 @@ class DiffractiveLayer(nn.Module):
 
         # Step B. 
         F = torch.fft.fftshift(torch.fft.fft2(E))
-        print(F.size())
-        print(self.H.size())
+        # print(F.size())
+        # print(self.H.size())
         propagated = torch.fft.ifft2(torch.fft.ifftshift(F * self.H))
 
         # Step C. 
@@ -621,46 +619,300 @@ class RadialAttenuationLayer(nn.Module):
 
         return E * attenuation
 
+
 class SensorLayer(nn.Module):
     """
-    Simulation of sensor end, crop and flip
+    THz thermal sensor model
+    Pipeline:
+    1. Constructing grid
+    2. Intensity
+    3. PSF (thermal diffusion on intensity)
+    4. Grid sampling
+    5. Binning
+    6. Flip
     """
-    def __init__(self, crop_size=(288, 384), displacement=(0, 0), bin_size=1, flip=False):
-        """
-        crop_size: crop size
-        bin_size: pixel binning size
-        flip: flip image
-        """
+
+    def __init__(self, crop_size=(288, 384), sensor_displacement=(0, 0), 
+                sensor_psf_enabled=False, sensor_psf_sigma=1.0, sensor_psf_kernel_size=9, 
+                use_target_resize=None, simulation_pitch=150.0, target_pitch=35.0, 
+                bin_size=1, flip=True):
         super().__init__()
+
         self.crop_size = crop_size
-        self.displacement = displacement
+        self.sensor_displacement = sensor_displacement
+
+        self.psf_enabled = sensor_psf_enabled
+        self.psf_sigma = sensor_psf_sigma  #! improvement: as a function of time
+        self.psf_kernel_size = sensor_psf_kernel_size
+
+        self.use_target_resize = use_target_resize
+        self.simulation_pitch = simulation_pitch
+        self.target_pitch = target_pitch
+
         self.bin_size = bin_size
         self.flip = flip
 
+    # ----------------------------
+    # Gaussian PSF (intensity domain)
+    # ----------------------------
+    def _gaussian_psf(self, device, dtype):
+        k = self.psf_kernel_size
+        s = self.psf_sigma
+
+        ax = torch.arange(k, device=device, dtype=dtype) - k // 2
+        xx, yy = torch.meshgrid(ax, ax, indexing="ij")
+
+        psf = torch.exp(-(xx**2 + yy**2) / (2 * s**2))
+        psf = psf / psf.sum()
+
+        return psf.view(1, 1, k, k)
+
+    def apply_psf(self, I):
+        if not self.psf_enabled:
+            return I
+
+        psf = self._gaussian_psf(I.device, I.dtype)
+
+        # depthwise conv on intensity
+        return F.conv2d(I, psf, padding="same")
+
+    # ----------------------------
+    # binning (pixel integration)
+    # ----------------------------
+    def apply_binning(self, I, bin_size):
+        if bin_size <= 1:
+            return I
+
+        B, C, H, W = I.shape
+
+        H2 = H // bin_size
+        W2 = W // bin_size
+
+        I = I[..., :H2 * bin_size, :W2 * bin_size]
+        I = I.reshape(B, C, H2, bin_size, W2, bin_size).mean(dim=(3, 5))
+
+        return I
+
+    # ----------------------------
+    # forward
+    # ----------------------------
     def forward(self, E):
         B, C, H, W = E.shape
+
+        # 1. crop + displacement (sub-pixel)
         crop_h, crop_w = self.crop_size
-        hh, hw = crop_h // 2, crop_w // 2
-        center_h, center_w = H // 2, W // 2
-        disp_h, disp_w = self.displacement
+        center_h = H / 2 + self.sensor_displacement[0]
+        center_w = W / 2 + self.sensor_displacement[1]
+        if self.use_target_resize is not None:
+            y = torch.linspace(
+                center_h - crop_h / 2,
+                center_h + crop_h / 2,
+                self.use_target_resize,
+                device=E.device,
+            )
+            x = torch.linspace(
+                center_w - crop_w / 2,
+                center_w + crop_w / 2,
+                self.use_target_resize,
+                device=E.device,
+            )
+        else:
+            y = torch.linspace(
+                center_h - crop_h / 2,
+                center_h + crop_h / 2,
+                int(crop_h * self.simulation_pitch / self.target_pitch),
+                device=E.device,
+            )
+            x = torch.linspace(
+                center_w - crop_w / 2,
+                center_w + crop_w / 2,
+                int(crop_w * self.simulation_pitch / self.target_pitch),
+                device=E.device,
+            )
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        grid = torch.stack(
+            (
+                2 * xx / (W - 1) - 1,
+                2 * yy / (H - 1) - 1,
+            ),
+            dim=-1,
+        )
+        grid = grid.unsqueeze(0).repeat(B, 1, 1, 1)
 
-        E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h,
-                    center_w - hw + disp_w:center_w + hw + disp_w]
+        # 2. Intensity
+        I = torch.abs(E) ** 2
 
-        I_crop = torch.abs(E_crop) ** 2
-        if self.bin_size > 1:
-            bin_size = self.bin_size
-            out_h = I_crop.shape[-2] // bin_size
-            out_w = I_crop.shape[-1] // bin_size
-            I_crop = I_crop[..., :out_h * bin_size, :out_w * bin_size]
-            I_crop = I_crop.reshape(B, C, out_h, bin_size, out_w, bin_size).mean(dim=(3, 5))
+        # 3. PSF
+        I = self.apply_psf(I)
 
+        # 4. Grid sampling
+        I = F.grid_sample(
+            I,
+            grid,
+            mode="bicubic",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+
+        # 5. pixel binning
+        I = self.apply_binning(I, self.bin_size)
+
+        # 6. flip
         if self.flip:
-            I_crop = torch.flip(I_crop, dims=[-2, -1])
+            I = torch.flip(I, dims=[-2, -1])
 
-        print(torch.min(I_crop))
-        print(torch.max(I_crop))
-        return I_crop.to(torch.float32)
+        return I.to(torch.float32)
+
+# class SensorLayer(nn.Module):
+#     """
+#     THz thermal sensor model
+#     Pipeline:
+#     1. Crop + displacement
+#     2. Intensity
+#     3. PSF (thermal diffusion on intensity)
+#     4. Resampling to camera grid
+#     5. Binning
+#     6. Flip
+#     """
+
+#     def __init__(self, crop_size=(288, 384), sensor_displacement=(0, 0), 
+#                 sensor_psf_enabled=False, sensor_psf_sigma=1.0, sensor_psf_kernel_size=9, 
+#                 simulation_pitch=150.0, target_pitch=35.0, bin_size=1, flip=True):
+#         super().__init__()
+
+#         self.crop_size = crop_size
+#         self.sensor_displacement = sensor_displacement
+
+#         self.psf_enabled = sensor_psf_enabled
+#         self.psf_sigma = sensor_psf_sigma  #! improvement: as a function of time
+#         self.psf_kernel_size = sensor_psf_kernel_size
+
+#         self.simulation_pitch = simulation_pitch
+#         self.target_pitch = target_pitch
+
+#         self.bin_size = bin_size
+#         self.flip = flip
+
+#         self.scale = 288 / crop_size[0]
+#     # ----------------------------
+#     # Gaussian PSF (intensity domain)
+#     # ----------------------------
+#     def _gaussian_psf(self, device, dtype):
+#         k = self.psf_kernel_size
+#         s = self.psf_sigma
+
+#         ax = torch.arange(k, device=device, dtype=dtype) - k // 2
+#         xx, yy = torch.meshgrid(ax, ax, indexing="ij")
+
+#         psf = torch.exp(-(xx**2 + yy**2) / (2 * s**2))
+#         psf = psf / psf.sum()
+
+#         return psf.view(1, 1, k, k)
+
+#     def apply_psf(self, I):
+#         if not self.psf_enabled:
+#             return I
+
+#         psf = self._gaussian_psf(I.device, I.dtype)
+
+#         # depthwise conv on intensity
+#         return F.conv2d(I, psf, padding="same")
+
+#     # ----------------------------
+#     # binning (pixel integration)
+#     # ----------------------------
+#     def apply_binning(self, I, bin_size):
+#         if bin_size <= 1:
+#             return I
+
+#         B, C, H, W = I.shape
+
+#         H2 = H // bin_size
+#         W2 = W // bin_size
+
+#         I = I[..., :H2 * bin_size, :W2 * bin_size]
+#         I = I.reshape(B, C, H2, bin_size, W2, bin_size).mean(dim=(3, 5))
+
+#         return I
+
+#     # ----------------------------
+#     # forward
+#     # ----------------------------
+#     def forward(self, E):
+#         B, C, H, W = E.shape
+
+#         # 1. crop + displacement
+#         crop_h, crop_w = self.crop_size
+#         hh, hw = crop_h // 2, crop_w // 2
+
+#         center_h, center_w = H // 2, W // 2
+#         disp_h, disp_w = self.sensor_displacement
+
+#         E = E[
+#             ...,
+#             center_h - hh + disp_h : center_h + hh + disp_h,
+#             center_w - hw + disp_w : center_w + hw + disp_w,
+#         ]
+
+#         # 2. intensity detection
+#         I = torch.abs(E) ** 2
+
+#         # 3. thermal PSF (sensor blur)
+#         I = self.apply_psf(I)
+
+#         # 4. resampling to camera grid
+#         I = F.interpolate(I, scale_factor=self.scale, mode="bicubic", align_corners=False)
+
+#         # 5. pixel binning
+#         I = self.apply_binning(I, self.bin_size)
+
+#         # 6. flip
+#         if self.flip:
+#             I = torch.flip(I, dims=[-2, -1])
+
+#         return I.to(torch.float32)
+
+# class SensorLayer(nn.Module):
+#     """
+#     Simulation of sensor end, crop and flip
+#     """
+#     def __init__(self, crop_size=(288, 384), displacement=(0, 0), bin_size=1, flip=False):
+#         """
+#         crop_size: crop size
+#         displacement: displacement of cropped area
+#         bin_size: pixel binning size
+#         flip: flip image
+#         """
+#         super().__init__()
+#         self.crop_size = crop_size
+#         self.displacement = displacement
+#         self.bin_size = bin_size
+#         self.flip = flip
+
+#     def forward(self, E):
+#         B, C, H, W = E.shape
+#         crop_h, crop_w = self.crop_size
+#         hh, hw = crop_h // 2, crop_w // 2
+#         center_h, center_w = H // 2, W // 2
+#         disp_h, disp_w = self.displacement
+
+#         E_crop = E[..., center_h - hh + disp_h:center_h + hh + disp_h,
+#                     center_w - hw + disp_w:center_w + hw + disp_w]
+
+#         I_crop = torch.abs(E_crop) ** 2
+#         if self.bin_size > 1:
+#             bin_size = self.bin_size
+#             out_h = I_crop.shape[-2] // bin_size
+#             out_w = I_crop.shape[-1] // bin_size
+#             I_crop = I_crop[..., :out_h * bin_size, :out_w * bin_size]
+#             I_crop = I_crop.reshape(B, C, out_h, bin_size, out_w, bin_size).mean(dim=(3, 5))
+
+#         if self.flip:
+#             I_crop = torch.flip(I_crop, dims=[-2, -1])
+
+#         # print(torch.min(I_crop))
+#         # print(torch.max(I_crop))
+#         return I_crop.to(torch.float32)
     
 # ====== Sensor Noise Simulation ======
 class SensorNoiseLayer(nn.Module):
@@ -725,7 +977,7 @@ class MaterialLayer(nn.Module):
     """
     ONN layer simulation
     """
-    def __init__(self, num_size=128, block_size=(1, 1), return_phases=True):
+    def __init__(self, num_size=128, block_size=(1, 1), return_phases=False):
         super().__init__()
         self.block_size = block_size
         self.return_phases = return_phases
@@ -741,6 +993,7 @@ class MaterialLayer(nn.Module):
         block_size: (block_h, block_w), multi-phase to one pixel
         """
         B, C, H, W = x.shape
+        #print(x.shape)
         block_h, block_w = self.block_size
 
         phase_full = self.phase.repeat_interleave(block_h, dim=0).repeat_interleave(block_w, dim=1) # 複製
@@ -756,173 +1009,393 @@ class MaterialLayer(nn.Module):
 
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
-    """
-    Simple ONN structure sample
-    """
     def __init__(self, config=ENCODER_CONFIG):
         super().__init__()
-        self.layers = nn.ModuleList()  # Module list 
-        self.layer_names = []  # Mudule name
-        
-        # SourceLayer
-        use_input           = config["use_input"]
-        input               = config["input"]
-        mode_source         = config["mode_source"]
-        size_source         = config["size_source"]
-        sigma               = config["sigma"]
-        amplitude           = config["amplitude"]
-        center              = config["center"]
-        rotaion             = config["rotation"]
-        aspect_ratio        = config["aspect_ratio"]
-        resize_size_source  = config["resize_size_source"]
-        new_size_source     = config["new_size_source"]
 
-        # ResizePadLayer
-        resize_size = config["resize_size"]
-        pad_size    = config["pad_size"]
+        self.layers = nn.ModuleList()
+        self.layer_names = []
 
-        # DiffractiveLayer 
-        num_layers      = config["num_layers"]
-        dx              = config["dx"]
-        num_size        = config["num_size"]
-        frequency       = config["frequency"]
-        z_values        = config["z"]  # e.g. [0.2, 0.3]
-        n               = config["refractive_index"]
-        pad_factor      = config["pad_factor"]
-        window          = config["window"]
-        #keep_pad        = config["keep_pad"]
-        mask_evanescent = config["mask_evanescent"]
-        reverse_z       = config["reverse_z"]
-        #multi_step      = config["multi_step"]
-        #eps             = config["eps"]
-        #alpha_global    = config["alpha_global"]
-        #beta_freq       = config["beta_freq"]
-        #use_geom_atten  = config["use_geom_atten"]
+        self.return_phases = config.get("return_phases", False)
 
-        # LensLayer 
-        focal_length = config["focal_length"]
-        dx           = config["dx"]
-        num_size     = config["num_size"]
-        wavelength   = config["wavelength"]
-        pupil_type   = config["pupil_type"]
-        pupil_radius = config["pupil_radius"]
-        pupil_width  = config["pupil_width"]
-        phase_model  = config["phase_model"]
-        mode_lens    = config["mode_lens"]
-        outside      = config["outside"]
-        frame        = config["frame"]
-        frame_inner  = config["frame_inner"]
-        frame_outer  = config["frame_outer"]
+        # =========================
+        # Config blocks
+        # =========================
+        transform_configs = config["transform_configs"]
+        diffractive_configs = config["diffractive_configs"]
+        lens_configs = config["lens_configs"]
+        material_configs = config.get("material_configs", [])
 
-        # SensorLayer
-        active_sensor   = config["active_sensor"]
-        crop_size       = config["crop_size"]
-        bin_size        = config["bin_size"]
-        flip            = config["flip"]
+        # Source
+        use_input = config["use_input"]
+        input_path = config["input"]
+        mode_source = config["mode_source"]
+        created_size = config["created_size"]
+        source_is_intensity = config["source_is_intensity"]
 
-        # SensorNoiseLayer
+        sigma = config["sigma"]
+        amplitude = config["amplitude"]
+        center = config["center"]
+        rotation = config["rotation"]
+        aspect_ratio = config["aspect_ratio"]
+
+        crop_size_source = config["crop_size_source"]
+        resize_size_source = config["resize_size_source"]
+        displace_size_source = config["displace_size_source"]
+        pad_size_source = config["pad_size_source"]
+
+        # Sensor
+        active_sensor = config["active_sensor"]
+        crop_size = config["crop_size"]
+        sensor_displacement = config["sensor_displacement"]
+        sensor_psf_enabled = config["sensor_psf_enabled"]
+        sensor_psf_sigma = config["sensor_psf_sigma"]
+        sensor_psf_kernel_size = config["sensor_psf_kernel_size"]
+        simulation_pitch = config["simulation_pitch"]
+        target_pitch = config["target_pitch"]
+        bin_size = config["bin_size"]
+        flip = config["flip"]
+
+        # Noise
         active_sensor_noise = config["active_sensor_noise"]
-        blur_kernel_size    = config["blur_kernel_size"]
-        blur_sigma          = config["blur_sigma"]
-        gray_mean           = config["gray_mean"]
-        gray_sigma          = config["gray_sigma"]
-        gray_ratio          = config["gray_ratio"]
-        noise_std           = config["noise_std"]
+        blur_kernel_size = config["blur_kernel_size"]
+        blur_sigma = config["blur_sigma"]
+        gray_mean = config["gray_mean"]
+        gray_sigma = config["gray_sigma"]
+        gray_ratio = config["gray_ratio"]
+        noise_std = config["noise_std"]
 
-        # MaterialLayer
-        num_size_material   = config["num_size"]
-        block_size          = config["block_size"]
-        return_phases       = config["return_phases"]
-        self.return_phases       = config["return_phases"]
-        
+        # Final process
+        self.gain = config["gain"]
+        self.bias = config["bias"]
+        self.noise_level = config["noise_level"]
 
-        # -------------------------------
-        # Construct layers
-        # -------------------------------
+
+        # wavelength
+        wavelength = config["wavelength"]
+
+        optical_chain = config.get("OPTICAL_CHAIN")
+        if optical_chain is not None:
+            if not isinstance(optical_chain, (list, tuple)) or len(optical_chain) == 0:
+                raise ValueError("OPTICAL_CHAIN must be a non-empty list")
+
+            source_base = {
+                "use_input": use_input,
+                "input": input_path,
+                "mode": mode_source,
+                "created_size": created_size,
+                "source_is_intensity": source_is_intensity,
+                "sigma": sigma,
+                "amplitude": amplitude,
+                "center": center,
+                "rotation": rotation,
+                "aspect_ratio": aspect_ratio,
+                "crop_size_source": crop_size_source,
+                "resize_size_source": resize_size_source,
+                "displace_size_source": displace_size_source,
+                "pad_size_source": pad_size_source,
+            }
+
+            sensor_base = {
+                "crop_size": crop_size,
+                "sensor_displacement": sensor_displacement,
+                "sensor_psf_enabled": sensor_psf_enabled,
+                "sensor_psf_sigma": sensor_psf_sigma,
+                "sensor_psf_kernel_size": sensor_psf_kernel_size,
+                "simulation_pitch": simulation_pitch,
+                "target_pitch": target_pitch,
+                "bin_size": bin_size,
+                "flip": flip,
+            }
+
+            noise_base = {
+                "blur_kernel_size": blur_kernel_size,
+                "blur_sigma": blur_sigma,
+                "gray_mean": gray_mean,
+                "gray_sigma": gray_sigma,
+                "gray_ratio": gray_ratio,
+                "noise_std": noise_std,
+            }
+
+            total_index = 1
+
+            def append_named_layer(layer, layer_name):
+                nonlocal total_index
+                self.layers.append(layer)
+                self.layer_names.append(f"{total_index}_{layer_name}")
+                total_index += 1
+
+            for spec in optical_chain:
+                if not isinstance(spec, dict) or "type" not in spec:
+                    raise ValueError("Each OPTICAL_CHAIN item must be a dict with a 'type' key")
+
+                layer_type = spec["type"]
+                params_override = spec.get("params", {})
+                layer_name = spec.get("name")
+
+                if layer_type == "source":
+                    params = dict(source_base)
+                    params.update(params_override)
+                    append_named_layer(SourceLayer(**params), layer_name or "SourceLayer")
+
+                elif layer_type == "diffractive":
+                    idx = spec["index"]
+                    diff_cfg = dict(diffractive_configs[idx])
+                    diff_cfg.update(params_override)
+                    append_named_layer(
+                        DiffractiveLayer(
+                            dx=diff_cfg["dx"],
+                            num_size=diff_cfg["num_size"],
+                            frequency=diff_cfg["frequency"],
+                            z=diff_cfg["z"],
+                            refractive_index=diff_cfg["refractive_index"],
+                            pad_factor=diff_cfg["pad_factor"],
+                            window=diff_cfg["window"],
+                            mask_evanescent=diff_cfg["mask_evanescent"],
+                            reverse_z=diff_cfg["reverse_z"],
+                        ),
+                        layer_name or diff_cfg.get("name", f"Diffractive{idx}")
+                    )
+
+                elif layer_type == "material":
+                    idx = spec["index"]
+                    material_cfg = dict(material_configs[idx])
+                    material_cfg.update(params_override)
+                    material_return_phases = material_cfg.get("return_phases", self.return_phases)
+                    append_named_layer(
+                        MaterialLayer(
+                            num_size=material_cfg["num_size"],
+                            block_size=material_cfg["block_size"],
+                            return_phases=material_return_phases,
+                        ),
+                        layer_name or material_cfg.get("name", f"Material{idx}")
+                    )
+
+                elif layer_type == "lens":
+                    idx = spec["index"]
+                    lens_cfg = dict(lens_configs[idx])
+                    lens_cfg.update(params_override)
+                    append_named_layer(
+                        LensLayer(
+                            focal_length=lens_cfg["focal_length"],
+                            dx=lens_cfg["dx"],
+                            num_size=lens_cfg["num_size"],
+                            wavelength=wavelength,
+                            pupil_type=lens_cfg["pupil_type"],
+                            pupil_radius=lens_cfg["pupil_radius"],
+                            pupil_width=lens_cfg["pupil_width"],
+                            phase_model=lens_cfg["phase_model"],
+                            mode=lens_cfg["mode"],
+                            outside=lens_cfg["outside"],
+                            frame=lens_cfg["frame"],
+                            frame_inner=lens_cfg["frame_inner"],
+                            frame_outer=lens_cfg["frame_outer"],
+                        ),
+                        layer_name or lens_cfg.get("name", f"Lens{idx}")
+                    )
+
+                elif layer_type == "sensor":
+                    if not active_sensor:
+                        continue
+                    params = dict(sensor_base)
+                    params.update(params_override)
+                    append_named_layer(
+                        SensorLayer(**params),
+                        layer_name or "SensorLayer"
+                    )
+
+                elif layer_type == "noise":
+                    if not active_sensor_noise:
+                        continue
+                    params = dict(noise_base)
+                    params.update(params_override)
+                    append_named_layer(
+                        SensorNoiseLayer(**params),
+                        layer_name or "SensorNoiseLayer"
+                    )
+
+                else:
+                    raise ValueError(f"Unknown optical chain layer type: {layer_type}")
+
+            print(f"[ONN] Built from OPTICAL_CHAIN with {len(self.layers)} layers")
+            return
+
+        # information reminder
+        print(f"Number of diffractive layers: {len(diffractive_configs)}")
+        print(f"Number of lens layers: {len(lens_configs)}")
+        print(f"Number of material layers: {len(material_configs)}")
+
+        material_map = {}
+        for idx, material_cfg in enumerate(material_configs):
+            attach_after = material_cfg.get("attach_after_diffractive_index", idx)
+            material_map.setdefault(attach_after, []).append(material_cfg)
+
+        # =========================
+        # Layer indexing
+        # =========================
         total_index = 1
-        resize_pad_layer_index = 1
-        diffractive_layer_index = 1
-        material_layer_index = 1
-        
-        self.layers.append(CropResizeDisplacePadLayer(resize_size=(160, 160), pad_size=(160, 160)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
+
+        # =========================
+        # Input transform
+        # =========================
+        t0 = transform_configs[0]
+        self.layers.append(
+            CropResizeDisplacePad(
+                crop_size=t0["crop_size"],
+                resize_size=t0["resize_size"],
+                displace=t0["displace_size"],
+                pad_size=t0["pad_size"],
+            )
+        )
+        self.layer_names.append(f"{total_index}_{t0['name']}")
         total_index += 1
 
-        self.layers.append(SourceLayer(use_input=use_input, input=input, mode=mode_source, size_source=size_source, sigma=sigma, amplitude=amplitude, 
-                                    center=center, rotation=rotaion, aspect_ratio=aspect_ratio, resize_size_source=resize_size_source, new_size_source=new_size_source))
+        # =========================
+        # Source
+        # =========================
+        self.layers.append(
+            SourceLayer(
+                use_input=use_input,
+                input=input_path,
+                mode=mode_source,
+                created_size=created_size,
+                source_is_intensity=source_is_intensity,
+                sigma=sigma,
+                amplitude=amplitude,
+                center=center,
+                rotation=rotation,
+                aspect_ratio=aspect_ratio,
+                crop_size_source=crop_size_source,
+                resize_size_source=resize_size_source,
+                displace_size_source=displace_size_source,
+                pad_size_source=pad_size_source,
+            )
+        )
         self.layer_names.append(f"{total_index}_SourceLayer")
         total_index += 1
 
-        self.layers.append(CropResizeDisplacePadLayer(resize_size=resize_size, pad_size=pad_size))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
-        total_index += 1
-
-        z_values_index = 0
-        for z_values_index in range(num_layers):
+        def append_diffractive_layer(diff_cfg):
+            nonlocal total_index
             self.layers.append(
-                DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+                DiffractiveLayer(
+                    dx=diff_cfg["dx"],
+                    num_size=diff_cfg["num_size"],
+                    frequency=diff_cfg["frequency"],
+                    z=diff_cfg["z"],
+                    refractive_index=diff_cfg["refractive_index"],
+                    pad_factor=diff_cfg["pad_factor"],
+                    window=diff_cfg["window"],
+                    mask_evanescent=diff_cfg["mask_evanescent"],
+                    reverse_z=diff_cfg["reverse_z"],
+                )
             )
-            self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-            diffractive_layer_index += 1
+            self.layer_names.append(f"{total_index}_{diff_cfg['name']}")
             total_index += 1
 
-            self.layers.append(MaterialLayer(num_size=num_size_material, block_size=block_size, return_phases=return_phases))
-            self.layer_names.append(f"{total_index}_MaterialLayer{material_layer_index}")
-            material_layer_index += 1
+        def append_lens_layer(lens_cfg):
+            nonlocal total_index
+            self.layers.append(
+                LensLayer(
+                    focal_length=lens_cfg["focal_length"],
+                    dx=lens_cfg["dx"],
+                    num_size=lens_cfg["num_size"],
+                    wavelength=wavelength,
+                    pupil_type=lens_cfg["pupil_type"],
+                    pupil_radius=lens_cfg["pupil_radius"],
+                    pupil_width=lens_cfg["pupil_width"],
+                    phase_model=lens_cfg["phase_model"],
+                    mode=lens_cfg["mode"],
+                    outside=lens_cfg["outside"],
+                    frame=lens_cfg["frame"],
+                    frame_inner=lens_cfg["frame_inner"],
+                    frame_outer=lens_cfg["frame_outer"],
+                )
+            )
+            self.layer_names.append(f"{total_index}_{lens_cfg['name']}")
             total_index += 1
 
-        self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                            pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
-        self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-        diffractive_layer_index += 1
-        total_index += 1
+        def append_material_layers(after_diff_idx):
+            nonlocal total_index
+            for material_cfg in material_map.get(after_diff_idx, []):
+                self.layers.append(
+                    MaterialLayer(
+                        num_size=material_cfg["num_size"],
+                        block_size=material_cfg["block_size"],
+                        return_phases=material_cfg.get("return_phases", True),
+                    )
+                )
+                self.layer_names.append(f"{total_index}_{material_cfg['name']}")
+                total_index += 1
 
-        # self.layers.append(LensLayer(focal_length=focal_length, dx=dx, num_size=num_size, wavelength=wavelength, pupil_type=pupil_type,
-        #                             pupil_radius=pupil_radius, pupil_width=pupil_width, phase_model=phase_model, mode=mode_lens, outside=outside, frame=frame,
-        #                             frame_inner=frame_inner, frame_outer=frame_outer))
-        # self.layer_names.append(f"{total_index}_LensLayer")
-        # total_index += 1
-        
-        # self.layers.append(DiffractiveLayer(dx=dx, num_size=num_size, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-        #                                     pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z))
-        # self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
-        # diffractive_layer_index += 1
-        # total_index += 1
+        # =========================
+        # Optical chain
+        # =========================
+        for i, lens_cfg in enumerate(lens_configs):
+            append_diffractive_layer(diffractive_configs[i])
+            append_material_layers(i)
+            append_lens_layer(lens_cfg)
 
-        # Sensor / Noise
+        append_diffractive_layer(diffractive_configs[-1])
+        append_material_layers(len(lens_configs))
+
+        # =========================
+        # Sensor
+        # =========================
         if active_sensor:
-            self.layers.append(SensorLayer(crop_size=crop_size, bin_size=bin_size, flip=flip))
+            self.layers.append(
+                SensorLayer(
+                    crop_size=crop_size,
+                    sensor_displacement=sensor_displacement,
+                    sensor_psf_enabled=sensor_psf_enabled,
+                    sensor_psf_sigma=sensor_psf_sigma,
+                    sensor_psf_kernel_size=sensor_psf_kernel_size,
+                    simulation_pitch=simulation_pitch,
+                    target_pitch=target_pitch,
+                    bin_size=bin_size,
+                    flip=flip,
+                )
+            )
             self.layer_names.append(f"{total_index}_SensorLayer")
             total_index += 1
+
+        # =========================
+        # Noise
+        # =========================
         if active_sensor_noise:
-            self.layers.append(SensorNoiseLayer(blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
-                                                gray_mean=gray_mean, gray_sigma=gray_sigma,
-                                                gray_ratio=gray_ratio, noise_std=noise_std))
+            self.layers.append(
+                SensorNoiseLayer(
+                    blur_kernel_size=blur_kernel_size,
+                    blur_sigma=blur_sigma,
+                    gray_mean=gray_mean,
+                    gray_sigma=gray_sigma,
+                    gray_ratio=gray_ratio,
+                    noise_std=noise_std,
+                )
+            )
             self.layer_names.append(f"{total_index}_SensorNoiseLayer")
             total_index += 1
-        
-        self.layers.append(CropResizeDisplacePadLayer(resize_size=(128, 128), pad_size=(128, 128)))
-        self.layer_names.append(f"{total_index}_ResizePadLayer{resize_pad_layer_index}")
-        resize_pad_layer_index += 1
-        total_index += 1
 
-    def forward(self, x):
-        # ======        
-        # return_phases=True, output phase of every material layer
-        # ======
-        phase_list = [] 
+    def forward(self, x, return_intermediate=False):
+        phase_list = []
+        outputs = []
 
-        for layer in self.layers:
-            if self.return_phases and isinstance(layer, MaterialLayer):
-                x, phase = layer(x)
-                phase_list.append(phase)
+        for name, layer in zip(self.layer_names, self.layers):
+            out = layer(x)
+            if isinstance(out, tuple):
+                x = out[0]
+                if len(out) > 1 and isinstance(layer, MaterialLayer):
+                    phase_list.append(out[1])
             else:
-                x = layer(x)
+                x = out
+            x = x * self.gain + self.bias #! temporary
+            outputs.append((name, x.detach().clone()))
 
+        if return_intermediate and self.return_phases:
+            return x, phase_list, outputs
+
+        if return_intermediate:
+            return x, outputs
+        
         if self.return_phases:
             return x, phase_list
-        else:
-            return x
+
+        return x

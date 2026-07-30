@@ -54,7 +54,6 @@ ENCODER_CONFIG = {
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
     "created_size": (512, 512),  # size of gaussian beam
     "source_is_intensity": True,
-    "return_phases": False,  # Return phase tensors from material layers for phase-based losses
 
     "sigma": 0.3,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
@@ -69,46 +68,10 @@ ENCODER_CONFIG = {
 
 
     #====== DiffractiveLayer ======
-    # Ordered propagation segments between optical elements
+    # 4F layout: object -> f1 -> lens1 -> f1 + f2 -> lens2 -> f2 -> image plane
     "diffractive_configs": [
         {
-            "name": "ObjectToMaterial1",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material1ToMaterial2",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material2ToMaterial3",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material3ToLens1",
+            "name": "ObjectToLens1",
             "z": 0.306,                  # distance (m)
             "dx": 0.00015,           # spatial resolution (m)
             "num_size": 640,           # size of each layer
@@ -146,28 +109,19 @@ ENCODER_CONFIG = {
     ],
     
     #====== MaterialLayer ======
-    "num_layers": 3,  # Number of material layers
+    "num_layers": 0,          # Number of ONN layers
     "material_configs": [
         {
             "name": "Material1",
-            "num_size": 128*5,  # number of (ONN neurons * block_size)
-            "block_size": (5, 5),  # simulation range of one ONN neuron
+            "num_size": 128,
+            "block_size": (2, 2),
             "return_phases": False,  # Switch: return phases for manufacture loss calculation
-            "attach_after_diffractive_index": 0,  # Insert after diffractive layer 0 (object -> material1)
         },
         {
             "name": "Material2",
-            "num_size": 128*5,
-            "block_size": (5, 5),
-            "return_phases": False,
-            "attach_after_diffractive_index": 1,  # Insert after diffractive layer 1 (material1 -> material2)
-        },
-        {
-            "name": "Material3",
-            "num_size": 128*5,
-            "block_size": (5, 5),
-            "return_phases": False,
-            "attach_after_diffractive_index": 2,  # Insert after diffractive layer 2 (material2 -> material3)
+            "num_size": 128,
+            "block_size": (2, 2),
+            "return_phase": False,
         },
     ],
 
@@ -245,28 +199,6 @@ ENCODER_CONFIG = {
 
 
 # --------------------------------------------------
-# Optical Chain Configuration
-# --------------------------------------------------
-# This chain controls the execution order of the optical simulation.
-# You can reorder, insert, or remove layers here without changing model code.
-OPTICAL_CHAIN = [
-    {"type": "source", "name": "SourceLayer"},
-    {"type": "diffractive", "name": "ObjectToMaterial1", "index": 0},
-    {"type": "material", "name": "Material1", "index": 0},
-    {"type": "diffractive", "name": "Material1ToMaterial2", "index": 1},
-    {"type": "material", "name": "Material2", "index": 1},
-    {"type": "diffractive", "name": "Material2ToMaterial3", "index": 2},
-    {"type": "material", "name": "Material3", "index": 2},
-    {"type": "diffractive", "name": "Material3ToLens1", "index": 3},
-    {"type": "lens", "name": "Lens1", "index": 0},
-    {"type": "diffractive", "name": "Lens1ToLens2", "index": 4},
-    {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToCamera", "index": 5},
-    {"type": "sensor", "name": "SensorLayer"},
-]
-
-
-# --------------------------------------------------
 # Restormer Configuration
 # --------------------------------------------------
 RESTORMER_CONFIG = {
@@ -311,11 +243,11 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Baseline_4F_SmallRestormer_v2",  # TensorBoard save path, e.g. runs/{run_file_name}
 
     "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics
-    "csv_log_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728/training_log.csv",  # CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -331,7 +263,7 @@ TRAINING_CONFIG = {
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Training hyperparameters ======
     # === Parallel ===
@@ -374,7 +306,7 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'epoch98_Loss0.0013_20260721_111517.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
@@ -383,7 +315,7 @@ TESTING_CONFIG = {
 
 
     # save config
-    "results_save_dir": './results/3ONN_4F_SmallRestormer_v1_0730_test',
+    "results_save_dir": './results/Baseline_4F_SmallRestormer_test',
     # "results_save_dir": './results/baseline_restormer_ONN_pad2',
     "results_save_name_suffix": '_metrics.json',
 

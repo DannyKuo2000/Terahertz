@@ -15,7 +15,7 @@ DATASET_CONFIG = {
     
     "valid_ratio": 0.05,   # propotion of validation
     "test_ratio": None,    # propotion of testing (if needed)
-    "resize": 167, # resize shortest side to 128. e.g. 267 or None
+    "resize": 267, # resize shortest side to 128. e.g. 267 or None
     "center_crop": None, #(400, 400), # e.g. (400, 400) or None
     "augmentation": {
         "use_random_rotation": False,
@@ -41,7 +41,7 @@ ENCODER_CONFIG = {
         {
             "name": "InputTransform",
             "crop_size": None,  # crop size, e.g., (H, W)
-            "resize_size": (167, 167),  # resize size, e.g., (H, W)
+            "resize_size": (267, 267),  # resize size, e.g., (H, W)
             "displace_size": (0, 0),#(int(30*3483/400), int(100*3483/400)),  # displace size, e.g., (H, W), down & right are positive
             "pad_size": (640, 640),  # pad size, e.g., (H, W)
         },
@@ -49,12 +49,11 @@ ENCODER_CONFIG = {
 
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
-    "use_input": False,  # use input source
+    "use_input": True,  # use input source
     "input": "other_data/NVLab260608/MultiSnap_2026-06-08_10-59-23_0265_0000.bmp",  # input source path
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
     "created_size": (512, 512),  # size of gaussian beam
     "source_is_intensity": True,
-    "return_phases": False,  # Return phase tensors from material layers for phase-based losses
 
     "sigma": 0.3,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
@@ -69,47 +68,11 @@ ENCODER_CONFIG = {
 
 
     #====== DiffractiveLayer ======
-    # Ordered propagation segments between optical elements
+    # 4F layout: object -> f1 -> lens1 -> f1 + f2 -> lens2 -> f2 -> image plane
     "diffractive_configs": [
         {
-            "name": "ObjectToMaterial1",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material1ToMaterial2",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material2ToMaterial3",
-            "z": 0.06,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Material3ToLens1",
-            "z": 0.306,                  # distance (m)
+            "name": "ObjectToLens1",
+            "z": 0.255,                  # distance (m)
             "dx": 0.00015,           # spatial resolution (m)
             "num_size": 640,           # size of each layer
             "frequency": 0.2004e12,     
@@ -121,7 +84,7 @@ ENCODER_CONFIG = {
         },
         {
             "name": "Lens1ToLens2",
-            "z": 0.408,
+            "z": 0.357,
             "dx": 0.00015,
             "num_size": 640,
             "frequency": 0.2004e12,
@@ -146,28 +109,19 @@ ENCODER_CONFIG = {
     ],
     
     #====== MaterialLayer ======
-    "num_layers": 3,  # Number of material layers
+    "num_layers": 0,          # Number of ONN layers
     "material_configs": [
         {
             "name": "Material1",
-            "num_size": 128*5,  # number of (ONN neurons * block_size)
-            "block_size": (5, 5),  # simulation range of one ONN neuron
+            "num_size": 128,
+            "block_size": (2,2),
             "return_phases": False,  # Switch: return phases for manufacture loss calculation
-            "attach_after_diffractive_index": 0,  # Insert after diffractive layer 0 (object -> material1)
         },
         {
             "name": "Material2",
-            "num_size": 128*5,
-            "block_size": (5, 5),
-            "return_phases": False,
-            "attach_after_diffractive_index": 1,  # Insert after diffractive layer 1 (material1 -> material2)
-        },
-        {
-            "name": "Material3",
-            "num_size": 128*5,
-            "block_size": (5, 5),
-            "return_phases": False,
-            "attach_after_diffractive_index": 2,  # Insert after diffractive layer 2 (material2 -> material3)
+            "num_size": 128,
+            "block_size": (2,2),
+            "return_phase": False,
         },
     ],
 
@@ -179,7 +133,7 @@ ENCODER_CONFIG = {
     "lens_configs": [
         {   # simulation range: dx * num_size
             "name": "Lens1",
-            "focal_length": 0.306,
+            "focal_length": 0.255,
             "dx": 0.00015,
             "num_size": 640,
             "pupil_type": "circular",
@@ -213,14 +167,13 @@ ENCODER_CONFIG = {
     #====== SensorLayer ======
     "active_sensor": True, # switch
 
-    "crop_size": (55.5556, 55.5556), #(67.2, 67.2), #(288*2, 384*2),
+    "crop_size": (62.3, 62.3), #(67.2, 67.2), #(288*2, 384*2),
     "sensor_displacement": (0, 0),
 
     "sensor_psf_enabled": False, # switch, PSF (thermal diffusion)
     "sensor_psf_sigma": 1.0,
     "sensor_psf_kernel_size": 9, 
 
-    "use_target_resize": 168,  # force resize to target size after cropping, if None, would use the pitch ratio below
     "simulation_pitch": 150,  # in um (micrometer)
     "target_pitch": 35,  # in um (micrometer)
 
@@ -245,35 +198,11 @@ ENCODER_CONFIG = {
 
 
 # --------------------------------------------------
-# Optical Chain Configuration
-# --------------------------------------------------
-# This chain controls the execution order of the optical simulation.
-# You can reorder, insert, or remove layers here without changing model code.
-OPTICAL_CHAIN = [
-    {"type": "source", "name": "SourceLayer"},
-    {"type": "diffractive", "name": "ObjectToMaterial1", "index": 0},
-    {"type": "material", "name": "Material1", "index": 0},
-    {"type": "diffractive", "name": "Material1ToMaterial2", "index": 1},
-    {"type": "material", "name": "Material2", "index": 1},
-    {"type": "diffractive", "name": "Material2ToMaterial3", "index": 2},
-    {"type": "material", "name": "Material3", "index": 2},
-    {"type": "diffractive", "name": "Material3ToLens1", "index": 3},
-    {"type": "lens", "name": "Lens1", "index": 0},
-    {"type": "diffractive", "name": "Lens1ToLens2", "index": 4},
-    {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToCamera", "index": 5},
-    {"type": "sensor", "name": "SensorLayer"},
-]
-
-
-# --------------------------------------------------
 # Restormer Configuration
 # --------------------------------------------------
 RESTORMER_CONFIG = {
     # alignment and downsampling padding
     "padding_factor": 8,
-    "use_input_padding": True,   # Pad input only when the spatial size is not divisible by padding_factor
-    "output_crop_size": 167,     # Center-crop the final output to this size; set to None to disable
     
     # I/O
     "inp_channels": 1,               # input channel number（gray=1，RGB=3）
@@ -294,7 +223,7 @@ RESTORMER_CONFIG = {
     "ffn_expansion_factor": 2.66,    # GDFN expansion factor
 
     # Normalization
-    "eps": 1e-6                      # LayerNorm2d epsilon
+    #"eps": 1e-6                      # LayerNorm2d epsilon
 }
 
 # --------------------------------------------------
@@ -311,11 +240,11 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_SmallRestormer",  # ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Baseline_4F_SmallRestormer",  # TensorBoard save path, e.g. runs/{run_file_name}
 
     "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics
-    "csv_log_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Baseline_4F_SmallRestormer/training_log.csv",  # CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -331,7 +260,7 @@ TRAINING_CONFIG = {
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_SmallRestormer/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Training hyperparameters ======
     # === Parallel ===
@@ -374,7 +303,7 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'epoch98_Loss0.0013_20260721_111517.pth',
     # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
@@ -383,7 +312,7 @@ TESTING_CONFIG = {
 
 
     # save config
-    "results_save_dir": './results/3ONN_4F_SmallRestormer_v1_0730_test',
+    "results_save_dir": './results/Baseline_4F_SmallRestormer_test',
     # "results_save_dir": './results/baseline_restormer_ONN_pad2',
     "results_save_name_suffix": '_metrics.json',
 

@@ -14,18 +14,17 @@ ENCODER_CONFIG = {
     # "image_path": "other_data/FourFSystemSimulationResult/8_SensorLayer_abs.png",
     "save_path": "other_data/FourFSystemSimulationResult",
 
-
     #====== Transformation for input image ======
     "transform_configs": [
         {
             "name": "InputTransform",
             "crop_size": None,  # crop size, e.g., (H, W)
-            "resize_size": (2286, 2286),  # resize size, e.g., (H, W)
+            "resize_size": (267, 267),  # resize size, e.g., (H, W)
             "displace_size": (0, 0),#(int(30*3483/400), int(100*3483/400)),  # displace size, e.g., (H, W), down & right are positive
-            "pad_size": (8192, 8192),  # pad size, e.g., (H, W)
+            "pad_size": (640, 640),  # pad size, e.g., (H, W)
         },
     ],
-    
+
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
     "use_input": True,  # use input source
@@ -33,15 +32,18 @@ ENCODER_CONFIG = {
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
     "created_size": (512, 512),  # size of gaussian beam
     "source_is_intensity": True,
+
     "sigma": 0.3,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
     "center": (0.0, 0.0),  # center of gaussian(pixel)
     "rotation": 0.0,  # rotation of gaussian(angle)
     "aspect_ratio": 1.0,  # oval ratio
+
     "crop_size_source": None,
-    "resize_size_source": (2286, int(2286*384/288)),  # 384/288 = 4/3, could be divided by 3 would be better
+    "resize_size_source": (267, int(267*384/288)),
     "displace_size_source": None,
-    "pad_size_source": (8192, 8192),
+    "pad_size_source": (640, 640),
+
 
     #====== DiffractiveLayer ======
     # 4F layout: object -> f1 -> lens1 -> f1 + f2 -> lens2 -> f2 -> image plane
@@ -49,8 +51,8 @@ ENCODER_CONFIG = {
         {
             "name": "ObjectToLens1",
             "z": 0.26,                  # distance (m)
-            "dx": 0.000035/2,           # spatial resolution (m)
-            "num_size": 8192,           # size of each layer
+            "dx": 0.00015,           # spatial resolution (m)
+            "num_size": 640,           # size of each layer
             "frequency": 0.2004e12,     
             "refractive_index": 1,      # refractive index
             "pad_factor": 1,
@@ -61,8 +63,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens1ToLens2",
             "z": 0.346,
-            "dx": 0.000035/2,
-            "num_size": 8192,
+            "dx": 0.00015,
+            "num_size": 640,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -73,8 +75,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2ToCamera",
             "z": 0.086,
-            "dx": 0.000035/2,
-            "num_size": 8192,
+            "dx": 0.00015,
+            "num_size": 640,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -110,10 +112,10 @@ ENCODER_CONFIG = {
         {   # simulation range: dx * num_size
             "name": "Lens1",
             "focal_length": 0.26,
-            "dx": 0.000035/2,
-            "num_size": 8192,
+            "dx": 0.00015,
+            "num_size": 640,
             "pupil_type": "circular",
-            "pupil_radius": 0.0508, # 0.0508
+            "pupil_radius": 0.0508, # 0.05
             "pupil_width": None,
             "phase_model": "exact", # high NA: exact, NA ~ sin(arctan(r/f))
             "mode": "forward",
@@ -125,10 +127,10 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2",
             "focal_length": 0.086,
-            "dx": 0.000035/2,
-            "num_size": 8192,
+            "dx": 0.00015,
+            "num_size": 640, 
             "pupil_type": "circular",
-            "pupil_radius": 0.0508, # 0.0254
+            "pupil_radius": 0.0508, # 0.025
             "pupil_width": None,
             "phase_model": "exact",
             "mode": "forward",
@@ -142,10 +144,19 @@ ENCODER_CONFIG = {
 
     #====== SensorLayer ======
     "active_sensor": True, # switch
-    "crop_size": (288*2, 384*2),
-    "bin_size": 2,
-    "flip": True,
 
+    "crop_size": (67.2, 67.2), #(288*2, 384*2),
+    "sensor_displacement": (0, 0),
+
+    "sensor_psf_enabled": False, # switch, PSF (thermal diffusion)
+    "sensor_psf_sigma": 1.0,
+    "sensor_psf_kernel_size": 9, 
+
+    "simulation_pitch": 150,  # in um (micrometer)
+    "target_pitch": 35,  # in um (micrometer)
+
+    "bin_size": 1,
+    "flip": True,
 
     #====== SensorNoiseLayer ======
     "active_sensor_noise": False, # Switch
@@ -158,7 +169,7 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ====== simulate as Brightness and Contrast
-    "gain": 0.065, 
-    "bias": 83/255, # should between 0 ~ 1, e.g. 0.001, 1/255
+    "gain": 0.85, 
+    "bias": 0/255, # should between 0 ~ 1, e.g. 0.001, 1/255
     "noise_level": 0,
 }

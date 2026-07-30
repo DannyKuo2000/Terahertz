@@ -24,7 +24,8 @@ class Autoencoder(nn.Module):
         if self.encoder is not None:
             out = self.encoder(x)
             if isinstance(out, tuple):
-                x, phase_list = out  # (x, phase_list)
+                x = out[0]
+                phase_list = out[1] if len(out) > 1 else None
             else:
                 x = out
 
