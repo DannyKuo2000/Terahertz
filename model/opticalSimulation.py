@@ -977,15 +977,53 @@ class MaterialLayer(nn.Module):
     """
     ONN layer simulation
     """
-    def __init__(self, num_size=128, block_size=(1, 1), return_phases=False):
+    def __init__(
+        self,
+        num_size=128,
+        block_size=(1, 1),
+        mode="default",
+        border_width=None,
+        return_phases=False,
+    ):
         super().__init__()
         self.block_size = block_size
         self.return_phases = return_phases
+        self.mode = mode
         h_small = math.ceil(num_size / block_size[0])
         w_small = math.ceil(num_size / block_size[1])
 
         init_phase = 2 * np.pi * np.random.rand(h_small, w_small).astype(np.float32)
         self.phase = nn.Parameter(torch.from_numpy(init_phase))
+
+        mode = str(mode).lower()
+        if mode not in ("default", "border"):
+            raise ValueError("mode must be 'default' or 'border'")
+
+        if mode == "default":
+            # Default behavior: train all phase cells.
+            train_mask = torch.ones(h_small, w_small)
+        elif mode == "border":
+            # Border mode: only the outer frame is trainable, center stays flat.
+            if border_width is None:
+                raise ValueError("border_width is required when mode='border'")
+            border = int(border_width)
+            train_mask = torch.zeros(h_small, w_small)
+            if border > 0:
+                train_mask[:border, :] = 1
+                train_mask[-border:, :] = 1
+                train_mask[:, :border] = 1
+                train_mask[:, -border:] = 1
+            else:
+                train_mask.fill_(1)
+
+        self.register_buffer("train_mask", train_mask)
+
+        # Keep the center flat from the start.
+        with torch.no_grad():
+            self.phase.mul_(self.train_mask)
+
+        # Block gradients in the frozen center so only the border updates.
+        self.phase.register_hook(lambda grad: grad * self.train_mask)
 
     def forward(self, x):
         """
@@ -1160,12 +1198,14 @@ class ONN(nn.Module):
                     idx = spec["index"]
                     material_cfg = dict(material_configs[idx])
                     material_cfg.update(params_override)
-                    material_return_phases = material_cfg.get("return_phases", self.return_phases)
+                    #material_return_phases = material_cfg.get("return_phases", self.return_phases)
                     append_named_layer(
                         MaterialLayer(
                             num_size=material_cfg["num_size"],
                             block_size=material_cfg["block_size"],
-                            return_phases=material_return_phases,
+                            mode=material_cfg["mode"],
+                            border_width=material_cfg["border_width"],
+                            return_phases=material_cfg["return_phases"],
                         ),
                         layer_name or material_cfg.get("name", f"Material{idx}")
                     )

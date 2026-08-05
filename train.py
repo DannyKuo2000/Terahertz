@@ -19,7 +19,8 @@ from torch import amp
 
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
-from model.restormer250724 import Restormer
+# from model.restormer250724 import Restormer
+from model.Restormer260803 import Restormer
 from dataset import get_dataloaders
 
 from config import (
@@ -47,6 +48,63 @@ def get_world_size():
 
 def is_main():
     return get_rank() == 0
+
+def count_parameters(module):
+    total = sum(p.numel() for p in module.parameters())
+    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    return total, trainable
+
+def unwrap_output(output):
+    if isinstance(output, (tuple, list)):
+        return output[0]
+    return output
+
+def time_forward(module, x):
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.perf_counter()
+    y = module(x)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    end = time.perf_counter()
+    return y, end - start
+
+def profile_named_children(module, child_names, x):
+    timings = {}
+    handles = []
+
+    def make_pre_hook(name):
+        def _pre_hook(_mod, _inputs):
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            timings[name] = time.perf_counter()
+        return _pre_hook
+
+    def make_post_hook(name):
+        def _post_hook(_mod, _inputs, _output):
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            timings[name] = time.perf_counter() - timings[name]
+        return _post_hook
+
+    for name in child_names:
+        child = getattr(module, name, None)
+        if isinstance(child, nn.Module):
+            handles.append(child.register_forward_pre_hook(make_pre_hook(name)))
+            handles.append(child.register_forward_hook(make_post_hook(name)))
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.perf_counter()
+    out = module(x)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    total = time.perf_counter() - start
+
+    for handle in handles:
+        handle.remove()
+
+    return out, total, timings
 
 
 # =========================================================
@@ -107,6 +165,19 @@ model = Autoencoder(
 if distributed:
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
+if is_main():
+    encoder_module = model.module.encoder if distributed else model.encoder
+    decoder_module = model.module.decoder if distributed else model.decoder
+    model_module = model.module if distributed else model
+
+    enc_total, enc_trainable = count_parameters(encoder_module)
+    dec_total, dec_trainable = count_parameters(decoder_module)
+    mdl_total, mdl_trainable = count_parameters(model_module)
+
+    print(f"[PARAMS] encoder   total={enc_total:,} trainable={enc_trainable:,}")
+    print(f"[PARAMS] decoder   total={dec_total:,} trainable={dec_trainable:,}")
+    print(f"[PARAMS] autoenc   total={mdl_total:,} trainable={mdl_trainable:,}")
+
 
 # =========================================================
 # Batch size
@@ -158,6 +229,32 @@ if TRAINING_CONFIG.get("use_scheduler", False):
 # =========================================================
 use_amp = TRAINING_CONFIG.get("use_amp", True)
 scaler = amp.GradScaler(enabled=use_amp)
+
+# =========================================================
+# Debug profile
+# =========================================================
+enable_profiling = TRAINING_CONFIG.get("enable_profiling", False)
+profile_steps = TRAINING_CONFIG.get("profile_steps", 0) if enable_profiling else 0
+profile_decoder_blocks = [
+    "patch_embed",
+    "encoder_level1",
+    "down1_2",
+    "encoder_level2",
+    "down2_3",
+    "encoder_level3",
+    "down3_4",
+    "latent",
+    "up4_3",
+    "reduce_chan_level3",
+    "decoder_level3",
+    "up3_2",
+    "reduce_chan_level2",
+    "decoder_level2",
+    "up2_1",
+    "decoder_level1",
+    "refinement",
+    "output",
+]
 
 
 # =========================================================
@@ -395,23 +492,114 @@ def train_model():
 
         optimizer.zero_grad()
 
-        for imgs, _ in tqdm(train_loader, disable=not is_main()):
-
+        for step_idx, (imgs, _) in enumerate(tqdm(train_loader, disable=not is_main())):
+            step_t0 = time.perf_counter()
             imgs = imgs.to(device)
+            step_t1 = time.perf_counter()
 
-            with amp.autocast(device_type="cuda", enabled=use_amp):
-                outputs = model(imgs)
-                out = get_reconstruction(outputs)
-                loss = criterion(out, imgs)
+            if is_main() and step_idx < profile_steps:  # for debug
+                model_ref = model.module if distributed else model
+                encoder_ref = model_ref.encoder
+                decoder_ref = model_ref.decoder
 
-            loss = loss / TRAINING_CONFIG.get("grad_accum_steps", 1)
+                enc_out, enc_time = time_forward(encoder_ref, imgs)
+                enc_x = unwrap_output(enc_out)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
+                dec_out, dec_time, dec_timings = profile_named_children(
+                    decoder_ref,
+                    profile_decoder_blocks,
+                    enc_x,
+                )
+                out = unwrap_output(dec_out)
 
-            total_loss += loss.item()
+                with amp.autocast(device_type="cuda", enabled=use_amp):
+                    loss = criterion(out, imgs)
+                step_t2 = time.perf_counter()
+
+                loss = loss / TRAINING_CONFIG.get("grad_accum_steps", 1)
+
+                with torch.autograd.profiler.profile(
+                    use_cuda=torch.cuda.is_available(),
+                    record_shapes=False,
+                ) as prof:
+                    scaler.scale(loss).backward()
+                step_t3 = time.perf_counter()
+
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                step_t4 = time.perf_counter()
+
+                total_loss += loss.item()
+
+                block_times = sorted(dec_timings.items(), key=lambda kv: kv[1], reverse=True)
+                top_sort = "cuda_time_total" if torch.cuda.is_available() else "cpu_time_total"
+
+                print(
+                    f"[PROFILE] step {step_idx + 1}: "
+                    f"to(device)={step_t1 - step_t0:.3f}s, "
+                    f"encoder={enc_time:.3f}s, "
+                    f"decoder_total={dec_time:.3f}s, "
+                    f"loss={step_t2 - step_t1 - enc_time - dec_time:.3f}s, "
+                    f"backward={step_t3 - step_t2:.3f}s, "
+                    f"step={step_t4 - step_t3:.3f}s"
+                )
+
+                if block_times:
+                    print("[PROFILE] decoder blocks:")
+                    for name, sec in block_times[:10]:
+                        print(f"  - {name}: {sec:.3f}s")
+
+                print("[PROFILE] backward ops:")
+                print(prof.key_averages().table(sort_by=top_sort, row_limit=12))
+            else:
+                with amp.autocast(device_type="cuda", enabled=use_amp):
+                    outputs = model(imgs)
+                    out = get_reconstruction(outputs)
+                    # ====== debug ======
+                    if not torch.isfinite(imgs).all():
+                        print(f"❌ INPUT NaN/Inf at epoch={epoch+1}, step={step_idx}")
+                        print("imgs min:", imgs.nan_to_num().min().item())
+                        print("imgs max:", imgs.nan_to_num().max().item())
+                        raise RuntimeError("Input contains NaN/Inf")
+                    if not torch.isfinite(out).all():
+                        print(f"❌ OUTPUT NaN/Inf at epoch={epoch+1}, step={step_idx}")
+                        print("out min:", out.nan_to_num().min().item())
+                        print("out max:", out.nan_to_num().max().item())
+                        raise RuntimeError("Model output contains NaN/Inf")
+                    
+
+
+                    loss = criterion(out, imgs)
+
+                    # ====== debug ======
+                    if not torch.isfinite(loss):
+                        print(f"❌ LOSS NaN/Inf at epoch={epoch+1}, step={step_idx}")
+                        print("loss:", loss.item())
+                        raise RuntimeError("Loss contains NaN/Inf")
+
+                loss = loss / TRAINING_CONFIG.get("grad_accum_steps", 1)
+
+                # ====== debug ======
+                if step_idx % 500 == 0:
+                    print(
+                        f"[DEBUG] step={step_idx} "
+                        f"loss={loss.item():.6e}, "
+                        f"out_min={out.min().item():.6e}, "
+                        f"out_max={out.max().item():.6e}, "
+                        f"out_mean={out.mean().item():.6e}, "
+                        f"out_std={out.std().item():.6e}"
+                    )
+
+                scaler.scale(loss).backward()
+                if (step_idx + 1) % TRAINING_CONFIG.get("grad_accum_steps", 1) == 0:  # accumulation steps
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+
+                total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
 
@@ -500,5 +688,3 @@ if __name__ == "__main__":
 
     if distributed:
         dist.destroy_process_group()
-
-

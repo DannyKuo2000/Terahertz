@@ -111,18 +111,22 @@ ENCODER_CONFIG = {
     #====== MaterialLayer ======
     "num_layers": 0,          # Number of ONN layers
     "material_configs": [
-        {
-            "name": "Material1",
-            "num_size": 128,
-            "block_size": (2, 2),
-            "return_phases": False,  # Switch: return phases for manufacture loss calculation
-        },
-        {
-            "name": "Material2",
-            "num_size": 128,
-            "block_size": (2, 2),
-            "return_phase": False,
-        },
+        # {
+        #     "name": "Material1",
+        #     "num_size": 128,
+        #     "block_size": (2, 2),
+        #     "mode": default,  # e.g. "default", "border"
+        #     "border_width": None,  # only valid when mode is "border"
+        #     "return_phases": False,  # Switch: return phases for manufacture loss calculation
+        # },
+        # {
+        #     "name": "Material2",
+        #     "num_size": 128,
+        #     "block_size": (2, 2),
+        #     "mode": default,  # e.g. "default", "border"
+        #     "border_width": None,  # only valid when mode is "border"
+        #     "return_phase": False,
+        # },
     ],
 
 
@@ -228,21 +232,24 @@ RESTORMER_CONFIG = {
     "out_channels": 1,               # output channel number
 
     # Embedding & Blocks
-    #"embed_dim": 48,                 # initial dim
-    "embed_dim": 16,
-    #"num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
+    # "dim": 48,                 # initial dim
+    "dim": 16,
+    # "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
     "num_blocks": [2, 3, 3, 4],
-    "num_heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
-
-    # Training Stability
-    "layerscale_init": 1e-2,         # LayerScale initail value（stable in small value）
-    "with_global_residual": True,    # switch of global residual (input+output)
+    "num_refinement_blocks": 4,
+    "heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
 
     # Feed-forward setup
     "ffn_expansion_factor": 2.66,    # GDFN expansion factor
+    "bias": False,
+    "LayerNorm_type": "WithBias",  # "WithBias" or "BiasFree"
+    "dual_pixel_task": False,
 
+    # Training Stability
+    # "layerscale_init": 1e-2,         # LayerScale initail value（stable in small value）
+    # "with_global_residual": True,    # switch of global residual (input+output)
     # Normalization
-    "eps": 1e-6                      # LayerNorm2d epsilon
+    # "eps": 1e-6                      # LayerNorm2d epsilon
 }
 
 # --------------------------------------------------
@@ -251,7 +258,7 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_encoder": True, # switch
     "use_decoder": True, # switch
-    "return_phases": True, # switch，for calculation of Phase local contrast loss
+    "return_phases": False, # switch，for calculation of Phase local contrast loss
 }
 
 # --------------------------------------------------
@@ -259,11 +266,10 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728",  # ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Baseline_4F_SmallRestormer_v2",  # TensorBoard save path, e.g. runs/{run_file_name}
-
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Baseline_4F_Restormer_v1_0804",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics
-    "csv_log_path": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728/training_log.csv",  # CSV log file path
+    "csv_log_path": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -274,12 +280,12 @@ TRAINING_CONFIG = {
     "tb_log_epoch_time": True,  # Log epoch duration to TensorBoard
     "tb_log_gpu_memory": True,  # Log GPU memory usage to TensorBoard
     "tb_log_recon_every_n_epochs": 5,  # Log reconstruction images every N epochs
-    "tb_log_recon_num_images": 20,  # Number of images to log for reconstruction visualization
+    "tb_log_recon_num_images": 40,  # Number of images to log for reconstruction visualization
 
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_SmallRestormer_v2_0728/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  # ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Training hyperparameters ======
     # === Parallel ===
@@ -322,17 +328,11 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch98_Loss0.0013_20260721_111517.pth',
-    # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN_PLC/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    # "weight_save_name": 'epoch56_valLoss0.0025_20251101_071249.pth',
-    # "weight_save_dir": './checkpoints_weights/baseline_restormer_ONN/weights',  # e.g.: ./checkpoints_weights/{run_name}/weights
-    # "weight_save_name": 'epoch60_valLoss0.0021_20251030_224229.pth',
-
+    "weight_save_dir": './checkpoints_weights/Baseline_4F_Restormer_v1_0804/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'epoch51_loss0.0040_20260803_134419.pth',
 
     # save config
-    "results_save_dir": './results/Baseline_4F_SmallRestormer_test',
-    # "results_save_dir": './results/baseline_restormer_ONN_pad2',
+    "results_save_dir": './results/Baseline_4F_Restormer_v1_0804',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug
