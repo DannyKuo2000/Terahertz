@@ -3,16 +3,18 @@
 # =========================================================
 # Single GPU: python train.py
 # Multi GPU: torchrun --nproc_per_node=2 train.py
+
 import os
 import csv
 import time
+from tqdm import tqdm
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
-
+from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, CosineAnnealingLR
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import amp
@@ -22,7 +24,6 @@ from model.opticalSimulation import ONN
 # from model.restormer250724 import Restormer
 from model.Restormer260803 import Restormer
 from dataset import get_dataloaders
-
 from config import (
     DATASET_CONFIG,
     ENCODER_CONFIG,
@@ -31,24 +32,9 @@ from config import (
     TRAINING_CONFIG
 )
 
-from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, CosineAnnealingLR
-
-
 # =========================================================
-# Distributed utilities
+# Debug utilities
 # =========================================================
-def is_distributed():
-    return dist.is_available() and dist.is_initialized()
-
-def get_rank():
-    return dist.get_rank() if is_distributed() else 0
-
-def get_world_size():
-    return dist.get_world_size() if is_distributed() else 1
-
-def is_main():
-    return get_rank() == 0
-
 def count_parameters(module):
     total = sum(p.numel() for p in module.parameters())
     trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
@@ -106,19 +92,54 @@ def profile_named_children(module, child_names, x):
 
     return out, total, timings
 
+# =========================================================
+# Distributed utilities
+# =========================================================
+def is_distributed():
+    return dist.is_available() and dist.is_initialized()  # return if the PyTorch provide distributed and if dist.init_process_group() been done
+
+def get_world_size():
+    return dist.get_world_size() if is_distributed() else 1
+
+def get_rank():
+    return dist.get_rank() if is_distributed() else 0  # return rank
+
+def is_main():
+    return get_rank() == 0  # return true or false if you are rank 0 or not
 
 # =========================================================
 # DDP initialization (CRITICAL FIX)
 # =========================================================
-distributed = TRAINING_CONFIG["distributed"]
+# Terminology explaination:
+# Process: real process
+# Rank: the label that DDP gave to process
+# local_rank: the label of process on this server. It means local_rank != Rank if there are multiple server
+distributed = TRAINING_CONFIG["distributed"]  # switch
 
 if distributed:
     local_rank = int(os.environ["LOCAL_RANK"])
+
+    print(
+        f"[BEFORE CUDA] "
+        f"RANK={os.environ.get('RANK')} "
+        f"LOCAL_RANK={local_rank}",
+        flush=True
+    )
+
     torch.cuda.set_device(local_rank)
+
+    print(
+        f"[GPU DEBUG] "
+        f"RANK={os.environ.get('RANK')} "
+        f"LOCAL_RANK={local_rank} "
+        f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')} "
+        f"current_device={torch.cuda.current_device()}",
+        flush=True
+    )
 
     dist.init_process_group(
         backend="nccl",   # IMPORTANT: use nccl for GPU
-        init_method="env://"
+        #init_method="env://"
     )
 else:
     local_rank = 0
@@ -182,7 +203,7 @@ if is_main():
 # =========================================================
 # Batch size
 # =========================================================
-global_batch = TRAINING_CONFIG.get("batch_size", 64)
+global_batch = TRAINING_CONFIG.get("global_batch_size", 64)
 
 if is_distributed():
     per_gpu_batch = max(1, global_batch // get_world_size())
@@ -204,8 +225,26 @@ train_loader, valid_loader, test_loader = get_dataloaders(
 # =========================================================
 # Optimizer / Loss
 # =========================================================
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
+# Loss
+if TRAINING_CONFIG["loss"] == "L1":
+    criterion = nn.L1Loss()
+elif TRAINING_CONFIG["loss"] == "MSE":
+    criterion = nn.MSELoss()
+else:
+    raise ValueError(f"Unsupported loss: {TRAINING_CONFIG['loss']}")
+
+# Optimizer
+optimizer_name = TRAINING_CONFIG["optimizer"]
+
+if optimizer_name == "AdamW":
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=TRAINING_CONFIG["learning_rate"],
+        **TRAINING_CONFIG["optimizer_params"],
+    )
+
+else:
+    raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
 
 # =========================================================
@@ -213,48 +252,53 @@ optimizer = optim.Adam(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 # =========================================================
 scheduler = None
 if TRAINING_CONFIG.get("use_scheduler", False):
-    t = TRAINING_CONFIG["scheduler_type"]
-    p = TRAINING_CONFIG["scheduler_params"]
+    scheduler_type = TRAINING_CONFIG["scheduler_type"]
+    scheduler_params = TRAINING_CONFIG["scheduler_params"]
 
-    if t == "ReduceLROnPlateau":
-        scheduler = ReduceLROnPlateau(optimizer, **p)
-    elif t == "StepLR":
-        scheduler = StepLR(optimizer, **p)
-    elif t == "CosineAnnealingLR":
-        scheduler = CosineAnnealingLR(optimizer, **p)
+    if scheduler_type == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer,**scheduler_params)
+
+    elif scheduler_type == "StepLR":
+        scheduler = StepLR(optimizer,**scheduler_params)
+
+    elif scheduler_type == "CosineAnnealingLR":
+        scheduler = CosineAnnealingLR(optimizer,**scheduler_params)
+
+    else:
+        raise ValueError(f"Unsupported scheduler: {scheduler_type}")
 
 
 # =========================================================
 # AMP
 # =========================================================
-use_amp = TRAINING_CONFIG.get("use_amp", True)
-scaler = amp.GradScaler(enabled=use_amp)
+# use_amp = TRAINING_CONFIG.get("use_amp", True)
+# scaler = amp.GradScaler(enabled=use_amp)
 
 # =========================================================
 # Debug profile
 # =========================================================
-enable_profiling = TRAINING_CONFIG.get("enable_profiling", False)
-profile_steps = TRAINING_CONFIG.get("profile_steps", 0) if enable_profiling else 0
-profile_decoder_blocks = [
-    "patch_embed",
-    "encoder_level1",
-    "down1_2",
-    "encoder_level2",
-    "down2_3",
-    "encoder_level3",
-    "down3_4",
-    "latent",
-    "up4_3",
-    "reduce_chan_level3",
-    "decoder_level3",
-    "up3_2",
-    "reduce_chan_level2",
-    "decoder_level2",
-    "up2_1",
-    "decoder_level1",
-    "refinement",
-    "output",
-]
+# enable_profiling = TRAINING_CONFIG.get("enable_profiling", False)
+# profile_steps = TRAINING_CONFIG.get("profile_steps", 0) if enable_profiling else 0
+# profile_decoder_blocks = [
+#     "patch_embed",
+#     "encoder_level1",
+#     "down1_2",
+#     "encoder_level2",
+#     "down2_3",
+#     "encoder_level3",
+#     "down3_4",
+#     "latent",
+#     "up4_3",
+#     "reduce_chan_level3",
+#     "decoder_level3",
+#     "up3_2",
+#     "reduce_chan_level2",
+#     "decoder_level2",
+#     "up2_1",
+#     "decoder_level1",
+#     "refinement",
+#     "output",
+# ]
 
 
 # =========================================================
@@ -321,7 +365,15 @@ def save_named_weights(filename):
     print(f"[SAVE] {path}")
 
 
-def save_named_checkpoint(filename, epoch, val_loss, optimizer=None, scheduler=None):
+def save_named_checkpoint(
+    filename,
+    epoch,
+    val_loss,
+    global_step,
+    best_loss,
+    optimizer=None,
+    scheduler=None,
+):
     if not is_main():
         return
 
@@ -329,19 +381,95 @@ def save_named_checkpoint(filename, epoch, val_loss, optimizer=None, scheduler=N
     os.makedirs(base_dir, exist_ok=True)
 
     checkpoint = {
+        # Model
         "model_state_dict": get_model_state_dict(model),
+
+        # Training progress
         "epoch": epoch,
+        "global_step": global_step,
+
+        # Validation / best model tracking
         "val_loss": val_loss,
+        "best_loss": best_loss,
     }
 
+    # Optimizer state
     if optimizer is not None:
         checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+
+    # Scheduler state
     if scheduler is not None:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
 
     path = os.path.join(base_dir, filename)
+
     torch.save(checkpoint, path)
+
     print(f"[SAVE] {path}")
+
+def load_checkpoint(
+    path,
+    model,
+    optimizer=None,
+    scheduler=None,
+    device="cuda",
+):
+    checkpoint = torch.load(
+        path,
+        map_location=device,
+    )
+
+    # ---------------------------------------------------------
+    # Model
+    # ---------------------------------------------------------
+
+    model.load_state_dict(
+        checkpoint["model_state_dict"]
+    )
+
+    # ---------------------------------------------------------
+    # Optimizer
+    # ---------------------------------------------------------
+
+    if optimizer is not None:
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(
+                checkpoint["optimizer_state_dict"]
+            )
+        else:
+            print("[WARNING] Optimizer state not found.")
+
+    # ---------------------------------------------------------
+    # Scheduler
+    # ---------------------------------------------------------
+
+    if scheduler is not None:
+        if "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(
+                checkpoint["scheduler_state_dict"]
+            )
+        else:
+            print("[WARNING] Scheduler state not found.")
+
+    # ---------------------------------------------------------
+    # Training progress
+    # ---------------------------------------------------------
+
+    start_epoch = checkpoint.get("epoch", -1) + 1
+    global_step = checkpoint.get("global_step", 0)
+    best_loss = checkpoint.get("best_loss", float("inf"))
+
+    print(
+        f"[RESUME] Loaded checkpoint: {path}"
+    )
+
+    print(
+        f"[RESUME] Starting from epoch={start_epoch}, "
+        f"global_step={global_step}, "
+        f"best_loss={best_loss:.6f}"
+    )
+
+    return start_epoch, global_step, best_loss
 
 
 def init_csv_log():
@@ -470,14 +598,23 @@ def get_reconstruction(outputs):
 # =========================================================
 # Training loop
 # =========================================================
-def train_model():
-
-    best_loss = float("inf")
+def train_model(
+        start_epoch=0,
+        global_step=0,
+        best_loss=float("inf"),
+    ):
 
     init_csv_log()
 
-    for epoch in range(TRAINING_CONFIG["epochs"]):
-        epoch_start = time.perf_counter()
+    # One global_step = one optimizer update
+    max_iterations = TRAINING_CONFIG["max_iterations"]
+
+    for epoch in range(start_epoch, TRAINING_CONFIG["epochs"]):
+        
+        epoch_t0 = time.perf_counter()
+
+        if global_step >= max_iterations:
+            break
 
         if torch.cuda.is_available() and tb_log_gpu_memory:
             torch.cuda.reset_peak_memory_stats(device)
@@ -488,143 +625,125 @@ def train_model():
                 sampler.set_epoch(epoch)
 
         model.train()
+
         total_loss = 0.0
 
-        optimizer.zero_grad()
+        grad_accum_steps = TRAINING_CONFIG.get("grad_accum_steps", 1)
 
-        for step_idx, (imgs, _) in enumerate(tqdm(train_loader, disable=not is_main())):
-            step_t0 = time.perf_counter()
+        optimizer.zero_grad(set_to_none=True)
+        accum_counter = 0
+
+        for step_idx, (imgs, _) in enumerate(
+            tqdm(train_loader, disable=not is_main())
+        ):
+
+            # Stop when reaching the maximum number of
+            # optimizer updates
+            if global_step >= max_iterations:
+                break
+
             imgs = imgs.to(device)
-            step_t1 = time.perf_counter()
 
-            if is_main() and step_idx < profile_steps:  # for debug
-                model_ref = model.module if distributed else model
-                encoder_ref = model_ref.encoder
-                decoder_ref = model_ref.decoder
+            # =====================================================
+            # Forward
+            # =====================================================
 
-                enc_out, enc_time = time_forward(encoder_ref, imgs)
-                enc_x = unwrap_output(enc_out)
+            outputs = model(imgs)
+            out = get_reconstruction(outputs)
+            loss = criterion(out, imgs)
 
-                dec_out, dec_time, dec_timings = profile_named_children(
-                    decoder_ref,
-                    profile_decoder_blocks,
-                    enc_x,
-                )
-                out = unwrap_output(dec_out)
+            # =====================================================
+            # Backward
+            # =====================================================
 
-                with amp.autocast(device_type="cuda", enabled=use_amp):
-                    loss = criterion(out, imgs)
-                step_t2 = time.perf_counter()
+            loss.backward()
 
-                loss = loss / TRAINING_CONFIG.get("grad_accum_steps", 1)
+            accum_counter += 1
 
-                with torch.autograd.profiler.profile(
-                    use_cuda=torch.cuda.is_available(),
-                    record_shapes=False,
-                ) as prof:
-                    scaler.scale(loss).backward()
-                step_t3 = time.perf_counter()
+            # =====================================================
+            # Gradient accumulation
+            # =====================================================
 
-                scaler.step(optimizer)
-                scaler.update()
+            # Update when:
+            # 1. accumulation window is full, or
+            # 2. this is the last batch of the epoch
+            if (
+                accum_counter == grad_accum_steps
+                or step_idx == len(train_loader) - 1
+            ):
+
+                # Average gradients over the actual
+                # accumulation window
+                for param in model.parameters():
+                    if param.grad is not None:
+                        param.grad.div_(accum_counter)
+
+                # =================================================
+                # Optimizer update
+                # =================================================
+
+                optimizer.step()
+
+                # =================================================
+                # Scheduler update
+                # =================================================
+
+                if scheduler is not None:
+                    scheduler.step()
+
+                # Prepare for next accumulation window
                 optimizer.zero_grad(set_to_none=True)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                step_t4 = time.perf_counter()
+                accum_counter = 0
 
-                total_loss += loss.item()
+                # One optimizer update = one global iteration
+                global_step += 1
 
-                block_times = sorted(dec_timings.items(), key=lambda kv: kv[1], reverse=True)
-                top_sort = "cuda_time_total" if torch.cuda.is_available() else "cpu_time_total"
-
-                print(
-                    f"[PROFILE] step {step_idx + 1}: "
-                    f"to(device)={step_t1 - step_t0:.3f}s, "
-                    f"encoder={enc_time:.3f}s, "
-                    f"decoder_total={dec_time:.3f}s, "
-                    f"loss={step_t2 - step_t1 - enc_time - dec_time:.3f}s, "
-                    f"backward={step_t3 - step_t2:.3f}s, "
-                    f"step={step_t4 - step_t3:.3f}s"
-                )
-
-                if block_times:
-                    print("[PROFILE] decoder blocks:")
-                    for name, sec in block_times[:10]:
-                        print(f"  - {name}: {sec:.3f}s")
-
-                print("[PROFILE] backward ops:")
-                print(prof.key_averages().table(sort_by=top_sort, row_limit=12))
-            else:
-                with amp.autocast(device_type="cuda", enabled=use_amp):
-                    outputs = model(imgs)
-                    out = get_reconstruction(outputs)
-                    # ====== debug ======
-                    if not torch.isfinite(imgs).all():
-                        print(f"❌ INPUT NaN/Inf at epoch={epoch+1}, step={step_idx}")
-                        print("imgs min:", imgs.nan_to_num().min().item())
-                        print("imgs max:", imgs.nan_to_num().max().item())
-                        raise RuntimeError("Input contains NaN/Inf")
-                    if not torch.isfinite(out).all():
-                        print(f"❌ OUTPUT NaN/Inf at epoch={epoch+1}, step={step_idx}")
-                        print("out min:", out.nan_to_num().min().item())
-                        print("out max:", out.nan_to_num().max().item())
-                        raise RuntimeError("Model output contains NaN/Inf")
-                    
-
-
-                    loss = criterion(out, imgs)
-
-                    # ====== debug ======
-                    if not torch.isfinite(loss):
-                        print(f"❌ LOSS NaN/Inf at epoch={epoch+1}, step={step_idx}")
-                        print("loss:", loss.item())
-                        raise RuntimeError("Loss contains NaN/Inf")
-
-                loss = loss / TRAINING_CONFIG.get("grad_accum_steps", 1)
-
-                # ====== debug ======
-                if step_idx % 500 == 0:
-                    print(
-                        f"[DEBUG] step={step_idx} "
-                        f"loss={loss.item():.6e}, "
-                        f"out_min={out.min().item():.6e}, "
-                        f"out_max={out.max().item():.6e}, "
-                        f"out_mean={out.mean().item():.6e}, "
-                        f"out_std={out.std().item():.6e}"
-                    )
-
-                scaler.scale(loss).backward()
-                if (step_idx + 1) % TRAINING_CONFIG.get("grad_accum_steps", 1) == 0:  # accumulation steps
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad(set_to_none=True)
-
-                total_loss += loss.item()
+            total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
 
-        if is_main():
-            print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
+        epoch_time_sec = time.perf_counter() - epoch_t0
 
-        # ================= validation =================
+        if is_main():
+            print(
+                f"Epoch {epoch + 1} | "
+                f"Iteration {global_step}/{max_iterations} | "
+                f"Loss: {avg_loss:.4f}"
+            )
+
+        # =========================================================
+        # Validation
+        # =========================================================
+
         val_loss = validate_model(epoch) if is_main() else float("inf")
 
-        if scheduler is not None:
-            if isinstance(scheduler, ReduceLROnPlateau):
-                scheduler.step(val_loss)
-            else:
-                scheduler.step()
+        # =========================================================
+        # GPU memory
+        # =========================================================
 
-        epoch_time_sec = time.perf_counter() - epoch_start
         if torch.cuda.is_available():
-            gpu_mem_allocated_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
-            gpu_mem_reserved_mb = torch.cuda.max_memory_reserved(device) / (1024 ** 2)
+            gpu_mem_allocated_mb = (
+                torch.cuda.max_memory_allocated(device)
+                / (1024 ** 2)
+            )
+
+            gpu_mem_reserved_mb = (
+                torch.cuda.max_memory_reserved(device)
+                / (1024 ** 2)
+            )
+
         else:
             gpu_mem_allocated_mb = 0.0
             gpu_mem_reserved_mb = 0.0
 
+        # =========================================================
+        # Logging / Checkpoint
+        # =========================================================
+
         if is_main():
+
             lr = get_current_lr()
+
             log_epoch_to_tensorboard(
                 epoch,
                 avg_loss,
@@ -633,6 +752,7 @@ def train_model():
                 gpu_mem_allocated_mb,
                 gpu_mem_reserved_mb,
             )
+
             append_csv_log(
                 epoch,
                 avg_loss,
@@ -643,14 +763,48 @@ def train_model():
                 gpu_mem_reserved_mb,
             )
 
+            # -----------------------------------------------------
+            # Save best model
+            # -----------------------------------------------------
+
             if val_loss < best_loss:
+
                 best_loss = val_loss
-                save_model(model, epoch, val_loss, optimizer, scheduler)
+
+                save_model(
+                    model,
+                    epoch,
+                    val_loss,
+                    optimizer,
+                    scheduler,
+                )
+
                 save_named_weights(best_model_name)
-                save_named_checkpoint(best_checkpoint_name, epoch, val_loss, optimizer, scheduler)
+
+                save_named_checkpoint(
+                    best_checkpoint_name,
+                    epoch,
+                    val_loss,
+                    global_step,
+                    best_loss,
+                    optimizer,
+                    scheduler,
+                )
+
+            # -----------------------------------------------------
+            # Save latest model
+            # -----------------------------------------------------
 
             save_named_weights(last_model_name)
-            save_named_checkpoint(last_checkpoint_name, epoch, val_loss, optimizer, scheduler)
+
+            save_named_checkpoint(
+                last_checkpoint_name,
+                epoch,
+                val_loss,
+                optimizer,
+                scheduler,
+            )
+
             log_reconstruction_to_tensorboard(epoch)
 
 

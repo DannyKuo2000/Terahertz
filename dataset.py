@@ -57,16 +57,16 @@ def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
 
     # ================= dataset =================
     if name == "MNIST":
-        full = datasets.MNIST("./data", True, download=True, transform=transform)
-        test = datasets.MNIST("./data", False, download=True, transform=transform)
+        full = datasets.MNIST("./data", True, download=False, transform=transform)
+        test = datasets.MNIST("./data", False, download=False, transform=transform)
 
     elif name == "FashionMNIST":
-        full = datasets.FashionMNIST("./data", True, download=True, transform=transform)
-        test = datasets.FashionMNIST("./data", False, download=True, transform=transform)
+        full = datasets.FashionMNIST("./data", True, download=False, transform=transform)
+        test = datasets.FashionMNIST("./data", False, download=False, transform=transform)
 
     elif name == "EMNIST":
-        full = datasets.EMNIST("./data", split=dataset_config["emnist_split"], train=True, download=True, transform=transform)
-        test = datasets.EMNIST("./data", split=dataset_config["emnist_split"], train=False, download=True, transform=transform)
+        full = datasets.EMNIST("./data", split=dataset_config["emnist_split"], train=True, download=False, transform=transform)
+        test = datasets.EMNIST("./data", split=dataset_config["emnist_split"], train=False, download=False, transform=transform)
 
     elif name == "Custom":
         full = CustomImageDataset(dataset_config["root"], transform)
@@ -84,7 +84,7 @@ def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
         mnist = datasets.MNIST(
             "./data",
             train=True,
-            download=True,
+            download=False,
             transform=transform
         )
 
@@ -92,7 +92,7 @@ def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
             "./data",
             split=dataset_config["emnist_split"],
             train=True,
-            download=True,
+            download=False,
             transform=transform
         )
 
@@ -133,14 +133,14 @@ def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
         mnist_test = datasets.MNIST(
             "./data",
             train=False,
-            download=True,
+            download=False,
             transform=transform
         )
         emnist_test = datasets.EMNIST(
             "./data",
             split=dataset_config["emnist_split"],
             train=False,
-            download=True,
+            download=False,
             transform=transform
         )
         emnist_test_indices = np.random.choice(

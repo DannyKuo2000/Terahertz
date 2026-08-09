@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+*.Research_NVLabServer
 
 # Data / Results / Checkpoints
 checkpoints_weights/

@@ -5,8 +5,8 @@ DATASET_CONFIG = {
     "dataset_name": "MNIST+EMNIST",   # Options: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
     
     "emnist_split": "byclass",  # dataset type of EMNIST (only available in EMNIST or MNIST+EMNIST)
-    "mnist_size": 60000, #60000,  # size of mnist for training (only available in MNIST+EMNIST)
-    "emnist_size": 15000, #15000,  # size for emnist training (only available in MNIST+EMNIST)
+    "mnist_size": 60000,  # size of mnist for training (only available in MNIST+EMNIST)
+    "emnist_size": 15000,  # size for emnist training (only available in MNIST+EMNIST)
     "emnist_test_ratio": 0.25,  # propotion of EMNIST dataset joined in test (only available in MNIST+EMNIST)
     "mnist_test_size": None,  # spare parameter
     "emnist_test_size": None,  # spare parameter
@@ -15,7 +15,7 @@ DATASET_CONFIG = {
     
     "valid_ratio": 0.05,   # propotion of validation
     "test_ratio": None,    # propotion of testing (if needed)
-    "resize": 167, # resize shortest side to 128. e.g. 267 or None
+    "resize": 160, # resize shortest side to 128. e.g. 267 or None
     "center_crop": None, #(400, 400), # e.g. (400, 400) or None
     "augmentation": {
         "use_random_rotation": False,
@@ -41,9 +41,9 @@ ENCODER_CONFIG = {
         {
             "name": "InputTransform",
             "crop_size": None,  # crop size, e.g., (H, W)
-            "resize_size": (167, 167),  # resize size, e.g., (H, W)
+            "resize_size": (160, 160),  # resize size, e.g., (H, W)
             "displace_size": (0, 0),#(int(30*3483/400), int(100*3483/400)),  # displace size, e.g., (H, W), down & right are positive
-            "pad_size": (640, 640),  # pad size, e.g., (H, W)
+            "pad_size": (384, 384),  # pad size, e.g., (H, W)
         },
     ],
 
@@ -64,7 +64,7 @@ ENCODER_CONFIG = {
     "crop_size_source": None,
     "resize_size_source": (267, int(267*384/288)),
     "displace_size_source": None,
-    "pad_size_source": (640, 640),
+    "pad_size_source": (384, 384),
 
 
     #====== DiffractiveLayer ======
@@ -73,8 +73,8 @@ ENCODER_CONFIG = {
         {
             "name": "ObjectToLens1",
             "z": 0.306,                  # distance (m)
-            "dx": 0.00015,           # spatial resolution (m)
-            "num_size": 640,           # size of each layer
+            "dx": 0.00025,           # spatial resolution (m)
+            "num_size": 384,           # size of each layer
             "frequency": 0.2004e12,     
             "refractive_index": 1,      # refractive index
             "pad_factor": 1,
@@ -85,8 +85,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens1ToLens2",
             "z": 0.408,
-            "dx": 0.00015,
-            "num_size": 640,
+            "dx": 0.00025,
+            "num_size": 384,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -97,8 +97,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2ToCamera",
             "z": 0.102,
-            "dx": 0.00015,
-            "num_size": 640,
+            "dx": 0.00025,
+            "num_size": 384,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -138,8 +138,8 @@ ENCODER_CONFIG = {
         {   # simulation range: dx * num_size
             "name": "Lens1",
             "focal_length": 0.306,
-            "dx": 0.00015,
-            "num_size": 640,
+            "dx": 0.00025,
+            "num_size": 384,
             "pupil_type": "circular",
             "pupil_radius": 0.0508, # 0.05 # radius usually in inches
             "pupil_width": None,
@@ -153,8 +153,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2",
             "focal_length": 0.102,
-            "dx": 0.00015,
-            "num_size": 640, 
+            "dx": 0.00025,
+            "num_size": 384, 
             "pupil_type": "circular",
             "pupil_radius": 0.0508, # 0.025 # radius usually in inches
             "pupil_width": None,
@@ -171,14 +171,14 @@ ENCODER_CONFIG = {
     #====== SensorLayer ======
     "active_sensor": True, # switch
 
-    "crop_size": (55.5556, 55.5556), #(67.2, 67.2), #(288*2, 384*2),
+    "crop_size": (53.3333, 53.3333), #(67.2, 67.2), #(288*2, 384*2),
     "sensor_displacement": (0, 0),
 
     "sensor_psf_enabled": False, # switch, PSF (thermal diffusion)
     "sensor_psf_sigma": 1.0,
     "sensor_psf_kernel_size": 9, 
 
-    "use_target_resize": 168,  # force resize to target size after cropping, if None, would use the pitch ratio below
+    "use_target_resize": 160,  # force resize to target size after cropping, if None, would use the pitch ratio below
     "simulation_pitch": 150,  # in um (micrometer)
     "target_pitch": 35,  # in um (micrometer)
 
@@ -225,18 +225,18 @@ RESTORMER_CONFIG = {
     # alignment and downsampling padding
     "padding_factor": 8,
     "use_input_padding": True,   # Pad input only when the spatial size is not divisible by padding_factor
-    "output_crop_size": 167,     # Center-crop the final output to this size; set to None to disable
+    "output_crop_size": 160,     # Center-crop the final output to this size; set to None to disable
     
     # I/O
     "inp_channels": 1,               # input channel number（gray=1，RGB=3）
     "out_channels": 1,               # output channel number
 
     # Embedding & Blocks
-    "dim": 48,                 # initial dim
-    # "dim": 16,
+    "dim": 8,                 # initial dim
+    # "dim": 48,
     "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
     # "num_blocks": [2, 3, 3, 4],
-    "num_refinement_blocks": 4,
+    "num_refinement_blocks": 2,
     "heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
 
     # Feed-forward setup
@@ -266,10 +266,10 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Baseline_4F_Restormer_v1_0804",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Baseline_4F_Restormer8_v1_0809",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": False,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -285,34 +285,43 @@ TRAINING_CONFIG = {
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_Restormer_v1_0804/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
-    # ====== Training hyperparameters ======
+    # ====== Experiments hyperparameters ======
     # === Debug ===
     "enable_profiling": False,  # extra info: para number, runtime  #! This would consume a lot of computation
     "profile_steps": 0,  # how many iteration to print out extra info
 
     # === Parallel ===
-    "distributed": False,
-    "num_workers": 0,  # using 0 in single GPU
+    "distributed": True,
+    "num_workers": 4,  # using 0 in single GPU
     
     # === Memory and Time Optimization ===
-    "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training Nan???
+    "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
     "grad_accum_steps": 1,  # number of mini batches 
     
-    # === Others ===
-    "batch_size": 1,
-    "epochs": 100,
-    "learning_rate": 1e-3,
-    "patience": 10,
-    "use_scheduler": True,                     # switch, using scheduler
-    "scheduler_type": "ReduceLROnPlateau",     # scheduler type: "StepLR", "CosineAnnealingLR"
-    "scheduler_params": {                      # scheduler parameters
-        "mode": "min",  # minimization val loss
-        "factor": 0.5,  # LR = LR * 0.5
-        "min_lr": 1e-6,  # minimum of LR
-        "patience": 4,  # number of epochs waiting for reducing LR
-        #"verbose": True,  # print LR changing infor
+    # === Training hyperparameters ===
+    "global_batch_size": 40,
+    "epochs": 500,
+    "max_iterations": 300_000,
+
+    # loss
+    "loss": "L1",
+
+    # Optimizer
+    "optimizer": "AdamW",
+    "learning_rate": 3e-4,
+    "optimizer_params": {  #! params for AdamW
+        "betas": (0.9, 0.999),
+        "weight_decay": 1e-4,
+    },
+
+    # Scheduler
+    "use_scheduler": True,
+    "scheduler_type": "CosineAnnealingLR",
+    "scheduler_params": {
+        "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
+        "eta_min": 1e-6,
     },
 
     # ====== Phase Local Contrast loss =======
@@ -334,11 +343,11 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Baseline_4F_Restormer_v1_0804/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Baseline_4F_Restormer8_v1_0809/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'epoch51_loss0.0040_20260803_134419.pth',
 
     # save config
-    "results_save_dir": './results/Baseline_4F_Restormer_v1_0804',  #! check before testing.
+    "results_save_dir": './results/Baseline_4F_Restormer8_v1_0809',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug
