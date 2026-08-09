@@ -1,7 +1,8 @@
+# *: gitignore file type, /: gitignore file 
 # Python
 __pycache__/
 *.pyc
-*.Research_NVLabServer
+
 
 # Data / Results / Checkpoints
 checkpoints_weights/
@@ -12,3 +13,5 @@ data/
 other_data/
 inference_results/
 sample_data/
+.Research_NVLabServer/
+data.zip
