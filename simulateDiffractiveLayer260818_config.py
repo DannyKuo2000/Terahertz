@@ -9,7 +9,7 @@
 
 ENCODER_CONFIG = {
     "image_path": "data/GroundTruth-800-v1/001.png",
-    "save_path": "results/Presentation260818/NoiseAdder4FDemonstration",
+    "save_path": "results/Presentation260818/Equivalent4FDemonstration",
 
     #====== Transformation for input image ======
     "transform_configs": [
