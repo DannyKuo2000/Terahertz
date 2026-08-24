@@ -15,7 +15,7 @@ DATASET_CONFIG = {
     
     "valid_ratio": 0.05,   # propotion of validation
     "test_ratio": None,    # propotion of testing (if needed)
-    "resize": 160, # resize shortest side to 128. e.g. 267 or None
+    "resize": 167, # resize shortest side to 128. e.g. 267 or None
     "center_crop": None, #(400, 400), # e.g. (400, 400) or None
     "augmentation": {
         "use_random_rotation": False,
@@ -41,9 +41,9 @@ ENCODER_CONFIG = {
         {
             "name": "InputTransform",
             "crop_size": None,  # crop size, e.g., (H, W)
-            "resize_size": (160, 160),  # resize size, e.g., (H, W)
+            "resize_size": (167, 167),  # resize size, e.g., (H, W)
             "displace_size": (0, 0),#(int(30*3483/400), int(100*3483/400)),  # displace size, e.g., (H, W), down & right are positive
-            "pad_size": (384, 384),  # pad size, e.g., (H, W)
+            "pad_size": (640, 640),  # pad size, e.g., (H, W)
         },
     ],
 
@@ -54,6 +54,7 @@ ENCODER_CONFIG = {
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
     "created_size": (512, 512),  # size of gaussian beam
     "source_is_intensity": True,
+    "return_phases": False,  # Return phase tensors from material layers for phase-based losses
 
     "sigma": 0.3,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
@@ -64,17 +65,53 @@ ENCODER_CONFIG = {
     "crop_size_source": None,
     "resize_size_source": (267, int(267*384/288)),
     "displace_size_source": None,
-    "pad_size_source": (384, 384),
+    "pad_size_source": (640, 640),
 
 
     #====== DiffractiveLayer ======
-    # 4F layout: object -> f1 -> lens1 -> f1 + f2 -> lens2 -> f2 -> image plane
+    # Ordered propagation segments between optical elements
     "diffractive_configs": [
         {
-            "name": "ObjectToLens1",
+            "name": "ObjectToMaterial1",
+            "z": 0.06,                  # distance (m)
+            "dx": 0.00015,           # spatial resolution (m)
+            "num_size": 640,           # size of each layer
+            "frequency": 0.2004e12,     
+            "refractive_index": 1,      # refractive index
+            "pad_factor": 1,
+            "window": "hann",
+            "mask_evanescent": False,
+            "reverse_z": False,
+        },
+        {
+            "name": "Material1ToMaterial2",
+            "z": 0.06,                  # distance (m)
+            "dx": 0.00015,           # spatial resolution (m)
+            "num_size": 640,           # size of each layer
+            "frequency": 0.2004e12,     
+            "refractive_index": 1,      # refractive index
+            "pad_factor": 1,
+            "window": "hann",
+            "mask_evanescent": False,
+            "reverse_z": False,
+        },
+        {
+            "name": "Material2ToMaterial3",
+            "z": 0.06,                  # distance (m)
+            "dx": 0.00015,           # spatial resolution (m)
+            "num_size": 640,           # size of each layer
+            "frequency": 0.2004e12,     
+            "refractive_index": 1,      # refractive index
+            "pad_factor": 1,
+            "window": "hann",
+            "mask_evanescent": False,
+            "reverse_z": False,
+        },
+        {
+            "name": "Material3ToLens1",
             "z": 0.306,                  # distance (m)
-            "dx": 0.00025,           # spatial resolution (m)
-            "num_size": 384,           # size of each layer
+            "dx": 0.00015,           # spatial resolution (m)
+            "num_size": 640,           # size of each layer
             "frequency": 0.2004e12,     
             "refractive_index": 1,      # refractive index
             "pad_factor": 1,
@@ -85,8 +122,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens1ToLens2",
             "z": 0.408,
-            "dx": 0.00025,
-            "num_size": 384,
+            "dx": 0.00015,
+            "num_size": 640,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -97,8 +134,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2ToCamera",
             "z": 0.102,
-            "dx": 0.00025,
-            "num_size": 384,
+            "dx": 0.00015,
+            "num_size": 640,
             "frequency": 0.2004e12,
             "refractive_index": 1,
             "pad_factor": 1,
@@ -109,24 +146,29 @@ ENCODER_CONFIG = {
     ],
     
     #====== MaterialLayer ======
-    "num_layers": 0,          # Number of ONN layers
+    "num_layers": 3,  # Number of material layers
     "material_configs": [
-        # {
-        #     "name": "Material1",
-        #     "num_size": 128,
-        #     "block_size": (2, 2),
-        #     "mode": default,  # e.g. "default", "border"
-        #     "border_width": None,  # only valid when mode is "border"
-        #     "return_phases": False,  # Switch: return phases for manufacture loss calculation
-        # },
-        # {
-        #     "name": "Material2",
-        #     "num_size": 128,
-        #     "block_size": (2, 2),
-        #     "mode": default,  # e.g. "default", "border"
-        #     "border_width": None,  # only valid when mode is "border"
-        #     "return_phase": False,
-        # },
+        {
+            "name": "Material1",
+            "num_size": 128*5,  # number of (ONN neurons * block_size)
+            "block_size": (5, 5),  # simulation range of one ONN neuron
+            "return_phases": False,  # Switch: return phases for manufacture loss calculation
+            "attach_after_diffractive_index": 0,  # Insert after diffractive layer 0 (object -> material1)
+        },
+        {
+            "name": "Material2",
+            "num_size": 128*5,
+            "block_size": (5, 5),
+            "return_phases": False,
+            "attach_after_diffractive_index": 1,  # Insert after diffractive layer 1 (material1 -> material2)
+        },
+        {
+            "name": "Material3",
+            "num_size": 128*5,
+            "block_size": (5, 5),
+            "return_phases": False,
+            "attach_after_diffractive_index": 2,  # Insert after diffractive layer 2 (material2 -> material3)
+        },
     ],
 
 
@@ -138,8 +180,8 @@ ENCODER_CONFIG = {
         {   # simulation range: dx * num_size
             "name": "Lens1",
             "focal_length": 0.306,
-            "dx": 0.00025,
-            "num_size": 384,
+            "dx": 0.00015,
+            "num_size": 640,
             "pupil_type": "circular",
             "pupil_radius": 0.0508, # 0.05 # radius usually in inches
             "pupil_width": None,
@@ -153,8 +195,8 @@ ENCODER_CONFIG = {
         {
             "name": "Lens2",
             "focal_length": 0.102,
-            "dx": 0.00025,
-            "num_size": 384, 
+            "dx": 0.00015,
+            "num_size": 640, 
             "pupil_type": "circular",
             "pupil_radius": 0.0508, # 0.025 # radius usually in inches
             "pupil_width": None,
@@ -171,14 +213,14 @@ ENCODER_CONFIG = {
     #====== SensorLayer ======
     "active_sensor": True, # switch
 
-    "crop_size": (53.3333, 53.3333), #(67.2, 67.2), #(288*2, 384*2),
+    "crop_size": (55.5556, 55.5556), #(67.2, 67.2), #(288*2, 384*2),
     "sensor_displacement": (0, 0),
 
     "sensor_psf_enabled": False, # switch, PSF (thermal diffusion)
     "sensor_psf_sigma": 1.0,
     "sensor_psf_kernel_size": 9, 
 
-    "use_target_resize": 160,  # force resize to target size after cropping, if None, would use the pitch ratio below
+    "use_target_resize": 168,  # force resize to target size after cropping, if None, would use the pitch ratio below
     "simulation_pitch": 150,  # in um (micrometer)
     "target_pitch": 35,  # in um (micrometer)
 
@@ -209,11 +251,17 @@ ENCODER_CONFIG = {
 # You can reorder, insert, or remove layers here without changing model code.
 OPTICAL_CHAIN = [
     {"type": "source", "name": "SourceLayer"},
-    {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
+    {"type": "diffractive", "name": "ObjectToMaterial1", "index": 0},
+    {"type": "material", "name": "Material1", "index": 0},
+    {"type": "diffractive", "name": "Material1ToMaterial2", "index": 1},
+    {"type": "material", "name": "Material2", "index": 1},
+    {"type": "diffractive", "name": "Material2ToMaterial3", "index": 2},
+    {"type": "material", "name": "Material3", "index": 2},
+    {"type": "diffractive", "name": "Material3ToLens1", "index": 3},
     {"type": "lens", "name": "Lens1", "index": 0},
-    {"type": "diffractive", "name": "Lens1ToLens2", "index": 1},
+    {"type": "diffractive", "name": "Lens1ToLens2", "index": 4},
     {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToCamera", "index": 2},
+    {"type": "diffractive", "name": "Lens2ToCamera", "index": 5},
     {"type": "sensor", "name": "SensorLayer"},
 ]
 
@@ -225,31 +273,28 @@ RESTORMER_CONFIG = {
     # alignment and downsampling padding
     "padding_factor": 8,
     "use_input_padding": True,   # Pad input only when the spatial size is not divisible by padding_factor
-    "output_crop_size": 160,     # Center-crop the final output to this size; set to None to disable
+    "output_crop_size": 167,     # Center-crop the final output to this size; set to None to disable
     
     # I/O
     "inp_channels": 1,               # input channel number（gray=1，RGB=3）
     "out_channels": 1,               # output channel number
 
     # Embedding & Blocks
-    "dim": 8,                 # initial dim
-    # "dim": 48,
-    "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
-    # "num_blocks": [2, 3, 3, 4],
-    "num_refinement_blocks": 2,
-    "heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
+    #"embed_dim": 48,                 # initial dim
+    "embed_dim": 16,
+    #"num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
+    "num_blocks": [2, 3, 3, 4],
+    "num_heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
+
+    # Training Stability
+    "layerscale_init": 1e-2,         # LayerScale initail value（stable in small value）
+    "with_global_residual": True,    # switch of global residual (input+output)
 
     # Feed-forward setup
     "ffn_expansion_factor": 2.66,    # GDFN expansion factor
-    "bias": False,
-    "LayerNorm_type": "WithBias",  # "WithBias" or "BiasFree"
-    "dual_pixel_task": False,
 
-    # Training Stability
-    # "layerscale_init": 1e-2,         # LayerScale initail value（stable in small value）
-    # "with_global_residual": True,    # switch of global residual (input+output)
     # Normalization
-    # "eps": 1e-6                      # LayerNorm2d epsilon
+    "eps": 1e-6                      # LayerNorm2d epsilon
 }
 
 # --------------------------------------------------
@@ -258,7 +303,7 @@ RESTORMER_CONFIG = {
 AUTOENCODER_CONFIG = {
     "use_encoder": True, # switch
     "use_decoder": True, # switch
-    "return_phases": False, # switch，for calculation of Phase local contrast loss
+    "return_phases": True, # switch，for calculation of Phase local contrast loss
 }
 
 # --------------------------------------------------
@@ -266,62 +311,48 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Baseline_4F_Restormer8_v1_0809",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
-    "csv_log_enabled": False,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809/training_log.csv",  #! check before trainging. CSV log file path
+    "checkpoints_weights_save_dir": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/3ONN_4F_SmallRestormer_v1_0730",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+
+    "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics
+    "csv_log_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
     "last_checkpoint_name": "last_checkpoint.pth",  # Filename for the latest full checkpoint
     
-    # ====== TensorBoard setting ======  #! close or reduce to improve training speed
-    "tb_log_lr": False,  # Log learning rate to TensorBoard  
-    "tb_log_epoch_time": False,  # Log epoch duration to TensorBoard  
-    "tb_log_gpu_memory": False,  # Log GPU memory usage to TensorBoard  
+    # ====== TensorBoard setting ======
+    "tb_log_lr": True,  # Log learning rate to TensorBoard
+    "tb_log_epoch_time": True,  # Log epoch duration to TensorBoard
+    "tb_log_gpu_memory": True,  # Log GPU memory usage to TensorBoard
     "tb_log_recon_every_n_epochs": 5,  # Log reconstruction images every N epochs
-    "tb_log_recon_num_images": 8,  # Number of images to log for reconstruction visualization
+    "tb_log_recon_num_images": 20,  # Number of images to log for reconstruction visualization
 
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Baseline_4F_Restormer8_v1_0809/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/checkpoints/epoch99_Loss0.0005_20260731_203404.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
-    # ====== Experiments hyperparameters ======
-    # === Debug ===
-    "enable_profiling": False,  # extra info: para number, runtime  #! This would consume a lot of computation
-    "profile_steps": 0,  # how many iteration to print out extra info
-
+    # ====== Training hyperparameters ======
     # === Parallel ===
-    "distributed": True,
-    "num_workers": 4,  # using 0 in single GPU
-    
+    "distributed": False,
+    "num_workers": 0,  # using 0 in single GPU
     # === Memory and Time Optimization ===
-    "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
-    "grad_accum_steps": 1,  # number of mini batches 
-    
-    # === Training hyperparameters ===
-    "global_batch_size": 40,
-    "epochs": 500,
-    "max_iterations": 300_000,
-
-    # loss
-    "loss": "L1",
-
-    # Optimizer
-    "optimizer": "AdamW",
-    "learning_rate": 3e-4,
-    "optimizer_params": {  #! params for AdamW
-        "betas": (0.9, 0.999),
-        "weight_decay": 1e-4,
-    },
-
-    # Scheduler
-    "use_scheduler": True,
-    "scheduler_type": "CosineAnnealingLR",
-    "scheduler_params": {
-        "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
-        "eta_min": 1e-6,
+    "use_amp": False,  # Automatic Mixed Precision: for reduction calculation cost and memory
+    "grad_accum_steps": 2,  # number of mini batches
+    # === Others ===
+    "batch_size": 8,
+    "epochs": 100,
+    "learning_rate": 1e-3,
+    "patience": 10,
+    "use_scheduler": True,                     # switch, using scheduler
+    "scheduler_type": "ReduceLROnPlateau",     # scheduler type: "StepLR", "CosineAnnealingLR"
+    "scheduler_params": {                      # scheduler parameters
+        "mode": "min",  # minimization val loss
+        "factor": 0.5,  # LR = LR * 0.5
+        "min_lr": 1e-6,  # minimum of LR
+        "patience": 4,  # number of epochs waiting for reducing LR
+        #"verbose": True,  # print LR changing infor
     },
 
     # ====== Phase Local Contrast loss =======
@@ -343,11 +374,12 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Baseline_4F_Restormer8_v1_0809/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch51_loss0.0040_20260803_134419.pth',
+    "weight_save_dir": './checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
 
     # save config
-    "results_save_dir": './results/Baseline_4F_Restormer8_v1_0809',  #! check before testing.
+    "results_save_dir": './results/3ONN_4F_SmallRestormer_v1_0730',  #! check before testing
+    # "results_save_dir": './latent_analysis/3ONN_4F_SmallRestormer_v1_0730',  #! check before testing
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug
@@ -355,4 +387,120 @@ TESTING_CONFIG = {
     "ONN_input_select": "fix",  # fix or random
     "ONN_input_idx": 0,  # if fixxed select, input the image number
     "seed": None,  # if randomly select, choose a seed
+}
+
+
+# --------------------------------------------------
+# Latent Analysis Configuration
+# --------------------------------------------------
+LATENT_ANALYSIS_CONFIG = {    
+    # === Parallel ===
+    "distributed": False,
+    "num_workers": 0,  # using 0 in single GPU
+    "batch_size": 20,
+
+    # load config
+    "weight_save_dir": './checkpoints_weights/3ONN_4F_SmallRestormer_v1_0730/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
+
+    # save config
+    "results_save_dir": './latent_analysis/3ONN_4F_SmallRestormer_v1_0730_analysis7',  #! check before testing.
+    "results_save_name_suffix": '_metrics.json',
+
+    # latent analysis modes
+    "analysis_modes": [
+        "mask_outer",
+        # "mask_center",
+        #"ring_by_ring",
+        # "random_mask",
+    ],
+
+    # shared mask ratios for mask_outer / mask_center / random_mask
+    "mask_ratios": [
+        # 0.01,
+        # 0.02,
+        # 0.03,
+        # 0.04,
+        # 0.05,
+        # 0.06,
+        # 0.07,
+        # 0.08,
+        # 0.09,
+        # 0.10,
+        # 0.111,
+        # 0.112,
+        # 0.113,
+        # 0.114,
+        # 0.115,
+        # 0.116,
+        # 0.117,
+        0.1180,
+        0.1185,
+        0.1190,
+        0.1195,
+        0.1200,
+        0.1205,  
+        0.1210,
+        0.1215,
+        0.1220,
+        0.1225,
+        0.1230,
+        0.1235,
+        0.1240,
+        0.1245,
+        0.1250,
+        0.1255,
+        0.126,
+        # 0.127,
+        # 0.128,
+        # 0.129,
+        # 0.130,
+        # 0.131,
+        # 0.132,
+        # 0.133,
+        # 0.134,
+        # 0.135,
+        # 0.136,
+        # 0.137,
+        # 0.138,
+        # 0.139,
+        # 0.140,
+        # 0.141,
+        # 0.142,
+        # 0.143,
+        # 0.144,
+        # 0.145,
+        # 0.146,
+        # 0.147,
+        # 0.148,
+        # 0.149, 
+        # 0.150,
+        # 0.151,
+        # 0.152,
+        # 0.153,
+        # 0.154,
+        # 0.155,
+        # 0.156,
+        # 0.157,
+        # 0.158,
+        # 0.159,
+        # 0.160,
+    ],
+
+    # ring-by-ring settings
+    "ring_num": 20,
+    "ring_mask_steps": [13, 14, 15, 16, 17, 18, 19, 20],
+    # Optional explicit ring combinations, e.g. [[7], [6, 7], [5, 6, 7]]
+    # If None, the code uses cumulative outer-ring masking from ring_mask_steps.
+    # larger ring number means outer ring, smaller ring number means inner ring.
+    "ring_mask_patterns": None,
+
+    # random mask control
+    "mask_seed": 1234,
+
+    # visualization control
+    "visualize_samples": 20,
+    "save_sample_panels": True,
+    "save_mask_previews": True,
+    "save_metric_curves": True,
 }

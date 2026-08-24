@@ -114,13 +114,17 @@ def load_model(model, model_path):
     )
 
     if hasattr(model, "module"):
-        model.module.load_state_dict(state_dict)
+        missing, unexpected = model.module.load_state_dict(state_dict, strict=False)
     else:
-        model.load_state_dict(state_dict)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
     model.eval()
     if is_main():
         print(f"Model loaded from {model_path}")
+        if missing:
+            print(f"[load_model] Missing keys ignored: {missing}")
+        if unexpected:
+            print(f"[load_model] Unexpected keys ignored: {unexpected}")
     return model
 
 

@@ -12,6 +12,9 @@ runs/
 data/
 other_data/
 inference_results/
+latent_analysis/
 sample_data/
 .Research_NVLabServer/
+
 data.zip
+ExperimentsRecord.xlsx

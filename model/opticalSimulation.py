@@ -40,7 +40,7 @@ class SourceLayer(nn.Module):
 
         # Gaussian beam parameter
         self.sigma = sigma
-        self.amplitude = amplitude 
+        self.amplitude = amplitude
         self.center = center
         self.rotation = rotation
         self.aspect_ratio = aspect_ratio
@@ -917,19 +917,11 @@ class SensorLayer(nn.Module):
 # ====== Sensor Noise Simulation ======
 class SensorNoiseLayer(nn.Module):
     """
-    Simple sensor noise simulation
+    Simple sensor noise simulation for grayscale images.
     """
-    def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10/255.):
-        """
-        config:
-            - blur_kernel_size
-            - blur_sigma
-            - gray_mean
-            - gray_sigma
-            - gray_ratio
-            - noise_std
-        """
+    def __init__(self, blur_kernel_size=15, blur_sigma=5, gray_mean=0.6, gray_sigma=0.02, gray_ratio=0.55, noise_std=10 / 255.):
         super().__init__()
+
         self.blur_kernel_size = blur_kernel_size
         self.blur_sigma = blur_sigma
         self.gray_mean = gray_mean
@@ -937,39 +929,71 @@ class SensorNoiseLayer(nn.Module):
         self.gray_ratio = gray_ratio
         self.noise_std = noise_std
 
-        # differentiable Gaussian kernel
-        self.register_buffer('gaussian_kernel', self._create_gaussian_kernel())
+        # Gaussian kernel for grayscale: [1, 1, K, K]
+        self.register_buffer("gaussian_kernel", self._create_gaussian_kernel())
 
     def forward(self, x):
         # Gaussian blur
         x = self._gaussian_blur(x)
 
         # Gray background
-        gray_bg = torch.randn_like(x) * self.gray_sigma + self.gray_mean  
-        x = (1 - self.gray_ratio) * x + self.gray_ratio * gray_bg
+        gray_bg = (torch.randn_like(x) * self.gray_sigma + self.gray_mean)
+
+        x = (
+            (1 - self.gray_ratio) * x
+            + self.gray_ratio * gray_bg
+        )
 
         # Add Gaussian noise
         noise = torch.randn_like(x) * self.noise_std
-        x = torch.clamp(x + noise, 0.0, 1.0)  
+
+        x = torch.clamp(
+            x + noise,
+            0.0,
+            1.0
+        )
 
         return x
 
     def _create_gaussian_kernel(self):
         k = self.blur_kernel_size
         sigma = self.blur_sigma
-        coords = torch.arange(k) - k // 2
+
+        coords = torch.arange(
+            k,
+            dtype=torch.float32
+        ) - k // 2
+
         grid = coords.repeat(k).view(k, k)
+
         x = grid
         y = grid.t()
-        kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+        kernel = torch.exp(
+            -(x**2 + y**2) / (2 * sigma**2)
+        )
+
+        # Normalize so that kernel sum = 1
         kernel = kernel / kernel.sum()
-        kernel = kernel.view(1, 1, k, k)  
-        kernel = kernel.repeat(3, 1, 1, 1) 
+
+        # Grayscale kernel: [out_channels, in_channels, H, W]
+        kernel = kernel.view(1, 1, k, k)
+
         return kernel
 
     def _gaussian_blur(self, x):
-        return F.conv2d(x, self.gaussian_kernel, 
-                        padding=self.blur_kernel_size // 2, groups=3)
+        # Make sure kernel has the same device and dtype as input
+        kernel = self.gaussian_kernel.to(
+            device=x.device,
+            dtype=x.dtype
+        )
+
+        return F.conv2d(
+            x,
+            kernel,
+            padding=self.blur_kernel_size // 2,
+            groups=1
+        )
 
 
 # ====== Material Phase Control ======

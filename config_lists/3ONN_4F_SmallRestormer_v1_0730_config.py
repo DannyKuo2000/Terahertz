@@ -378,7 +378,7 @@ TESTING_CONFIG = {
     "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
 
     # save config
-    "results_save_dir": './results/3ONN_4F_SmallRestormer_v1_0730',
+    "results_save_dir": './results/3ONN_4F_SmallRestormer_v1_0730',  #! check before testing
     "results_save_name_suffix": '_metrics.json',
 
     # ONN debug

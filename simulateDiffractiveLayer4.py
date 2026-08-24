@@ -152,7 +152,7 @@ class ONN(nn.Module):
 
         self.layers.append(
                 DiffractiveLayer(dx=dx, num_size=num_size_diffractive, frequency=frequency, z=z_values[z_values_index], refractive_index=n,
-                                 pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
+                                    pad_factor=pad_factor, window=window, mask_evanescent=mask_evanescent, reverse_z=reverse_z)
         )
         self.layer_names.append(f"{total_index}_DiffractiveLayer{diffractive_layer_index}")
         z_values_index += 1
