@@ -388,8 +388,10 @@ TESTING_CONFIG = {
     "batch_size": 40,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
+    # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch168_loss0.0076_20260826_034025.pth',
+    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'best_model.pth',
 
     # save config
     "results_save_dir": './results/ONN_Restormer8_v1_0824',  #! check before testing.

@@ -387,9 +387,11 @@ TESTING_CONFIG = {
     "num_workers": 4,  # using 0 in single GPU
     "batch_size": 40,
 
-    # load config
-    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
+    # # load config
+    # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
+    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'last_model.pth',
 
     # save config
     "results_save_dir": './results/ONN_Restormer8_v1_0824',  #! check before testing.
@@ -414,8 +416,10 @@ LATENT_ANALYSIS_CONFIG = {
     "batch_size": 20,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
+    # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
+    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'best_model.pth',
 
     # save config
     "results_save_dir": './latent_analysis/ONN_Restormer8_v1_0824_analysis7',  #! check before analyzing.
