@@ -387,11 +387,11 @@ TESTING_CONFIG = {
     "num_workers": 4,  # using 0 in single GPU
     "batch_size": 40,
 
-    # load config
+    # # load config
     # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    # "weight_save_name": 'epoch168_loss0.0076_20260826_034025.pth',
+    # "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
     "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'best_model.pth',
+    "weight_save_name": 'last_model.pth',
 
     # save config
     "results_save_dir": './results/ONN_Restormer8_v1_0824',  #! check before testing.
@@ -413,21 +413,23 @@ LATENT_ANALYSIS_CONFIG = {
     # === Parallel ===
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 20,
+    "batch_size": 40,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
+    # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
+    "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/ONN_Restormer8_v1_0824_analysis7',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/ONN_Restormer8_v1_0824_analysis5',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes
     "analysis_modes": [
-        "mask_outer",
+        # "mask_outer",
         # "mask_center",
-        #"ring_by_ring",
+        "ring_by_ring",
         # "random_mask",
     ],
 
@@ -504,12 +506,15 @@ LATENT_ANALYSIS_CONFIG = {
     ],
 
     # ring-by-ring settings
-    "ring_num": 20,
-    "ring_mask_steps": [13, 14, 15, 16, 17, 18, 19, 20],
+    # larger ring number means outer ring, smaller ring number means inner ring.
+    "ring_num": 60,
+    "ring_mask_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                        11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                        21, 22, 23, 24, 25, 26, 27, 28, 29, 30], # ring numbers to be masked in each step
+    
     # Optional explicit ring combinations, e.g. [[7], [6, 7], [5, 6, 7]]
     # If None, the code uses cumulative outer-ring masking from ring_mask_steps.
-    # larger ring number means outer ring, smaller ring number means inner ring.
-    "ring_mask_patterns": None,
+    "ring_mask_patterns": None, #[[15, 16, 17], [16, 17], [17]],  # None,
 
     # random mask control
     "mask_seed": 1234,
@@ -519,4 +524,46 @@ LATENT_ANALYSIS_CONFIG = {
     "save_sample_panels": True,
     "save_mask_previews": True,
     "save_metric_curves": True,
+}
+
+
+# --------------------------------------------------
+# Latent Analysis V2 Configuration
+# --------------------------------------------------
+LATENT_ANALYSIS_V2_CONFIG = {
+    **LATENT_ANALYSIS_CONFIG,
+
+    # analysis name
+    "analysis_name": "region_heatmap",
+
+    # latent space partition
+    "region_rows": 8,
+    "region_cols": 8,
+
+    # If None, analyze all regions.
+    # If provided, only these region ids will be analyzed.
+    # Region ids are assigned in row-major order.
+    "region_ids_to_analyze": None,
+
+    # heatmap metrics to save
+    # supported: delta_psnr, delta_mse, relative_mse, delta_ssim, masked_psnr,
+    # masked_mse, masked_ssim, recon_diff_l1, recon_diff_mse
+    "heatmap_metrics": [
+        "delta_psnr",
+        "delta_mse",
+        "relative_mse",
+        "recon_diff_l1",
+    ],
+
+    # visualization control
+    "annotate_heatmap": False,
+    "save_baseline_panel": True,
+    "save_region_previews": True,
+    "preview_region_limit": 6,
+    "preview_region_ids": None,
+    "save_output_diff_maps": True,
+    "save_output_diff_maps_limit": 6,
+
+    # whether to save per-region JSON files
+    "save_region_json": True,
 }

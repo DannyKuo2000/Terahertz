@@ -744,7 +744,7 @@ class SensorLayer(nn.Module):
 
         # 3. PSF
         I = self.apply_psf(I)
-
+        
         # 4. Grid sampling
         I = F.grid_sample(
             I,
@@ -756,7 +756,7 @@ class SensorLayer(nn.Module):
 
         # 5. pixel binning
         I = self.apply_binning(I, self.bin_size)
-
+        
         # 6. flip
         if self.flip:
             I = torch.flip(I, dims=[-2, -1])
@@ -1112,6 +1112,7 @@ class ONN(nn.Module):
         sensor_psf_enabled = config["sensor_psf_enabled"]
         sensor_psf_sigma = config["sensor_psf_sigma"]
         sensor_psf_kernel_size = config["sensor_psf_kernel_size"]
+        use_target_resize = config.get("use_target_resize", None)
         simulation_pitch = config["simulation_pitch"]
         target_pitch = config["target_pitch"]
         bin_size = config["bin_size"]
@@ -1412,6 +1413,7 @@ class ONN(nn.Module):
                     sensor_psf_enabled=sensor_psf_enabled,
                     sensor_psf_sigma=sensor_psf_sigma,
                     sensor_psf_kernel_size=sensor_psf_kernel_size,
+                    use_target_resize=use_target_resize,
                     simulation_pitch=simulation_pitch,
                     target_pitch=target_pitch,
                     bin_size=bin_size,

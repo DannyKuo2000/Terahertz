@@ -1,3 +1,4 @@
+import csv
 import json
 import math
 import os
@@ -165,7 +166,8 @@ def select_reconstruction(outputs):
 
 def test_model(model):
     model.eval()
-    all_imgs, all_recons = [], []
+    local_imgs, local_recons = [], []
+    local_mses = []
 
     local_sse = 0.0
     local_pixel_count = 0
@@ -181,6 +183,9 @@ def test_model(model):
             if torch.is_complex(recons):
                 recons = torch.abs(recons)
 
+            batch_mse_sum = F.mse_loss(recons, imgs, reduction="none").flatten(1).mean(dim=1)
+            local_mses.extend(batch_mse_sum.detach().cpu().tolist())
+
             local_sse += F.mse_loss(recons, imgs, reduction="sum").item()
             local_pixel_count += imgs.numel()
 
@@ -188,9 +193,8 @@ def test_model(model):
                 local_ssim_sum += ssim_pt(imgs[i : i + 1], recons[i : i + 1])
                 local_ssim_count += 1
 
-            if is_main():
-                all_imgs.append(imgs.cpu())
-                all_recons.append(recons.cpu())
+            local_imgs.append(imgs.cpu())
+            local_recons.append(recons.cpu())
 
     if distributed:
         stats = torch.tensor(
@@ -207,18 +211,46 @@ def test_model(model):
 
     global_psnr = compute_psnr(global_mse)
 
+    if distributed:
+        gathered = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(
+            gathered,
+            {
+                "imgs": local_imgs,
+                "recons": local_recons,
+                "mses": local_mses,
+            },
+        )
+    else:
+        gathered = [
+            {
+                "imgs": local_imgs,
+                "recons": local_recons,
+                "mses": local_mses,
+            }
+        ]
+
     if is_main():
+        all_imgs = []
+        all_recons = []
+        all_mses = []
+        for payload in gathered:
+            all_imgs.extend(payload["imgs"])
+            all_recons.extend(payload["recons"])
+            all_mses.extend(payload["mses"])
+
         if all_imgs:
             all_imgs = torch.cat(all_imgs, dim=0)
             all_recons = torch.cat(all_recons, dim=0)
         else:
             all_imgs = None
             all_recons = None
+            all_mses = []
 
         print(f"Test MSE: {global_mse:.6f}, PSNR: {global_psnr:.4f}, SSIM: {global_ssim:.4f}")
-        return all_imgs, all_recons, global_mse, global_psnr, global_ssim
+        return all_imgs, all_recons, all_mses, global_mse, global_psnr, global_ssim
 
-    return None, None, global_mse, global_psnr, global_ssim
+    return None, None, None, global_mse, global_psnr, global_ssim
 
 
 def visualize_results(all_imgs, all_recons, model_name, num_image, config):
@@ -243,6 +275,234 @@ def visualize_results(all_imgs, all_recons, model_name, num_image, config):
     plt.savefig(save_path)
     plt.close(fig)
     print(f"Visualization saved at {save_path}")
+
+
+def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config):
+    if all_imgs is None or all_recons is None or not all_mses:
+        return
+
+    save_root = os.path.join(config["results_save_dir"], "mse_ranked")
+    os.makedirs(save_root, exist_ok=True)
+
+    mse_values = list(all_mses)
+    num_samples = min(len(all_imgs), len(all_recons), len(mse_values))
+    if num_samples == 0:
+        return
+
+    indexed = list(enumerate(mse_values[:num_samples]))
+    indexed.sort(key=lambda item: item[1])
+
+    panel_size = max(1, int(config.get("mse_panel_size", 12)))
+
+    def parse_quantile_range(value, default_start, default_end):
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            start_q, end_q = float(value[0]), float(value[1])
+        else:
+            start_q, end_q = default_start, default_end
+        start_q = max(0.0, min(1.0, start_q))
+        end_q = max(0.0, min(1.0, end_q))
+        if end_q < start_q:
+            start_q, end_q = end_q, start_q
+        if end_q == start_q:
+            end_q = min(1.0, start_q + 1e-6)
+        return start_q, end_q
+
+    def select_from_quantile_range(q_range, desired_count, mode="head"):
+        start_q, end_q = q_range
+        start_idx = int(math.floor(start_q * num_samples))
+        end_idx = int(math.ceil(end_q * num_samples))
+        start_idx = max(0, min(num_samples, start_idx))
+        end_idx = max(start_idx + 1, min(num_samples, end_idx))
+        subset = indexed[start_idx:end_idx]
+        if not subset:
+            subset = indexed
+
+        desired = min(desired_count, len(subset))
+        if desired <= 0:
+            return []
+
+        if len(subset) <= desired:
+            return [idx for idx, _ in subset]
+
+        if mode == "tail":
+            subset = subset[-desired:]
+        elif mode == "middle":
+            center = len(subset) // 2
+            half = desired // 2
+            sub_start = max(0, center - half)
+            sub_end = min(len(subset), sub_start + desired)
+            sub_start = max(0, sub_end - desired)
+            subset = subset[sub_start:sub_end]
+        else:
+            subset = subset[:desired]
+
+        return [idx for idx, _ in subset]
+
+    best_range = parse_quantile_range(config.get("mse_best_quantile_range"), 0.0, 0.1)
+    middle_range = parse_quantile_range(config.get("mse_middle_quantile_range"), 0.45, 0.55)
+    bottom_range = parse_quantile_range(config.get("mse_bottom_quantile_range"), 0.9, 1.0)
+
+    best_indices = select_from_quantile_range(best_range, panel_size, mode="head")
+    middle_indices = select_from_quantile_range(middle_range, panel_size, mode="middle")
+    bottom_indices = select_from_quantile_range(bottom_range, panel_size, mode="tail")
+
+    def save_group(indices, title, filename):
+        if not indices:
+            return
+
+        cols = len(indices)
+        fig, axes = plt.subplots(3, cols, figsize=(max(6, cols * 2.2), 6))
+        if cols == 1:
+            axes = axes.reshape(3, 1)
+
+        for col, idx in enumerate(indices):
+            img = all_imgs[idx].squeeze().numpy()
+            recon = all_recons[idx].squeeze().numpy()
+            diff = abs(img - recon)
+            mse_val = mse_values[idx]
+            psnr_val = compute_psnr(mse_val)
+
+            axes[0, col].imshow(img, cmap="gray")
+            axes[0, col].set_title(
+                f"#{idx}\nMSE={mse_val:.4g}\nPSNR={psnr_val:.2f}",
+                fontsize=9,
+            )
+            axes[1, col].imshow(recon, cmap="gray")
+            axes[2, col].imshow(diff, cmap="magma")
+            for row in range(3):
+                axes[row, col].axis("off")
+
+        axes[0, 0].set_ylabel("GT", fontsize=11)
+        axes[1, 0].set_ylabel("Recon", fontsize=11)
+        axes[2, 0].set_ylabel("Abs Diff", fontsize=11)
+        fig.suptitle(title, fontsize=14)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        save_path = os.path.join(save_root, filename)
+        plt.savefig(save_path, dpi=180)
+        plt.close(fig)
+        print(f"MSE-ranked visualization saved at {save_path}")
+
+    if config.get("save_mse_best_panel", False):
+        save_group(best_indices, "Best cases by MSE", f"{model_name}_best_case.png")
+    if config.get("save_mse_middle_panel", True):
+        save_group(middle_indices, "Middle cases by MSE", f"{model_name}_middle_case.png")
+    if config.get("save_mse_bottom_panel", True):
+        save_group(bottom_indices, "Bottom cases by MSE", f"{model_name}_bottom_case.png")
+
+    if config.get("save_mse_ranked_csv", True):
+        csv_path = os.path.join(save_root, f"{model_name}_mse_ranking.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["rank_ascending", "sample_index", "mse", "psnr"])
+            for rank, (idx, mse_val) in enumerate(indexed):
+                writer.writerow([rank, idx, mse_val, compute_psnr(mse_val)])
+        print(f"MSE ranking saved at {csv_path}")
+
+
+def percentile(sorted_values, q):
+    if not sorted_values:
+        return None
+    if q <= 0:
+        return sorted_values[0]
+    if q >= 1:
+        return sorted_values[-1]
+
+    pos = (len(sorted_values) - 1) * q
+    lower = int(math.floor(pos))
+    upper = int(math.ceil(pos))
+    if lower == upper:
+        return sorted_values[lower]
+    lower_val = sorted_values[lower]
+    upper_val = sorted_values[upper]
+    return lower_val * (upper - pos) + upper_val * (pos - lower)
+
+
+def save_psnr_distribution_table(all_mses, model_name, config):
+    if not all_mses:
+        return
+
+    save_root = os.path.join(config["results_save_dir"], "mse_ranked")
+    os.makedirs(save_root, exist_ok=True)
+
+    psnr_values = [compute_psnr(mse_val) for mse_val in all_mses]
+    finite_psnrs = [value for value in psnr_values if math.isfinite(value)]
+    inf_count = len(psnr_values) - len(finite_psnrs)
+
+    summary_path = os.path.join(save_root, f"{model_name}_psnr_distribution_summary.csv")
+    bins_path = os.path.join(save_root, f"{model_name}_psnr_distribution_bins.csv")
+
+    quantile_points = config.get("psnr_quantile_points", [0.1, 0.25, 0.5, 0.75, 0.9])
+    finite_sorted = sorted(finite_psnrs)
+
+    with open(summary_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["stat", "value"])
+        writer.writerow(["count_total", len(psnr_values)])
+        writer.writerow(["count_finite", len(finite_psnrs)])
+        writer.writerow(["count_inf", inf_count])
+        if finite_sorted:
+            mean_val = sum(finite_sorted) / len(finite_sorted)
+            variance = sum((x - mean_val) ** 2 for x in finite_sorted) / len(finite_sorted)
+            std_val = math.sqrt(variance)
+            writer.writerow(["mean", mean_val])
+            writer.writerow(["std", std_val])
+            writer.writerow(["min", finite_sorted[0]])
+            for q in quantile_points:
+                writer.writerow([f"q{int(float(q) * 100)}", percentile(finite_sorted, float(q))])
+            writer.writerow(["max", finite_sorted[-1]])
+
+    bin_edges = config.get("psnr_bin_edges", [0, 5, 10, 15, 20, 25, 30, 35, 40, 100])
+    try:
+        bin_edges = [float(edge) for edge in bin_edges]
+    except (TypeError, ValueError):
+        bin_edges = [0, 5, 10, 15, 20, 25, 30, 35, 40, 100]
+
+    if len(bin_edges) < 2:
+        bin_edges = [0, 100]
+
+    bins = [0 for _ in range(len(bin_edges) - 1)]
+    for value in finite_psnrs:
+        placed = False
+        for i in range(len(bin_edges) - 1):
+            lower = bin_edges[i]
+            upper = bin_edges[i + 1]
+            if i == len(bin_edges) - 2:
+                if lower <= value <= upper:
+                    bins[i] += 1
+                    placed = True
+                    break
+            elif lower <= value < upper:
+                bins[i] += 1
+                placed = True
+                break
+        if not placed and value < bin_edges[0]:
+            bins[0] += 1
+
+    total_finite = max(1, len(finite_psnrs))
+    with open(bins_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["bin_index", "lower_bound", "upper_bound", "count", "ratio"])
+        for i, count in enumerate(bins):
+            lower = bin_edges[i]
+            upper = bin_edges[i + 1]
+            writer.writerow([i, lower, upper, count, count / total_finite])
+        writer.writerow(["inf", "", "", inf_count, inf_count / max(1, len(psnr_values))])
+
+    if config.get("save_psnr_distribution_histogram", True):
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.hist(finite_psnrs, bins=bin_edges, color="#4C78A8", edgecolor="black", alpha=0.85)
+        ax.set_title("PSNR Distribution")
+        ax.set_xlabel("PSNR")
+        ax.set_ylabel("Count")
+        ax.grid(True, axis="y", alpha=0.25)
+        fig.tight_layout()
+        hist_path = os.path.join(save_root, f"{model_name}_psnr_distribution_hist.png")
+        plt.savefig(hist_path, dpi=180)
+        plt.close(fig)
+        print(f"PSNR histogram saved at {hist_path}")
+
+    print(f"PSNR summary saved at {summary_path}")
+    print(f"PSNR bins saved at {bins_path}")
 
 
 def onn_output_debug(model):
@@ -350,11 +610,29 @@ if __name__ == "__main__":
     if TESTING_CONFIG.get("onn_debug", False) and is_main():
         onn_output_debug(model)
 
-    all_imgs, all_recons, mse, psnr, ssim = test_model(model)
+    all_imgs, all_recons, all_mses, mse, psnr, ssim = test_model(model)
 
     if is_main():
         if all_imgs is not None and all_recons is not None:
-            visualize_results(all_imgs, all_recons, model_name, num_image=10, config=TESTING_CONFIG)
+            visualize_results(
+                all_imgs,
+                all_recons,
+                model_name,
+                num_image=TESTING_CONFIG.get("save_first_n_reconstructions", 10),
+                config=TESTING_CONFIG,
+            )
+
+            if TESTING_CONFIG.get("save_mse_ranked_panels", True):
+                visualize_results_by_mse(
+                    all_imgs,
+                    all_recons,
+                    all_mses,
+                    model_name,
+                    TESTING_CONFIG,
+                )
+
+            if TESTING_CONFIG.get("save_psnr_distribution_table", True):
+                save_psnr_distribution_table(all_mses, model_name, TESTING_CONFIG)
 
         os.makedirs(TESTING_CONFIG["results_save_dir"], exist_ok=True)
         metrics_path = os.path.join(

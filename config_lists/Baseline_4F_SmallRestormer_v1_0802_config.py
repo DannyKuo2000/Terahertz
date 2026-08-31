@@ -325,8 +325,10 @@ TESTING_CONFIG = {
     "batch_size": 8,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer_v1_0802/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    "weight_save_name": 'epoch51_loss0.0040_20260803_134419.pth',
+    # "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer_v1_0802/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    # "weight_save_name": 'epoch51_loss0.0040_20260803_134419.pth',
+    "weight_save_dir": './checkpoints_weights/Baseline_4F_SmallRestormer_v1_0802',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_name": 'best_model.pth',
 
     # save config
     "results_save_dir": './results/Baseline_4F_SmallRestormer_v1_0802',  #! check before testing.

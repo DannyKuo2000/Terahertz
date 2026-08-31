@@ -8,8 +8,9 @@
 
 
 ENCODER_CONFIG = {
-    "image_path": "data/GroundTruth-800-v1/004.png",
-    "save_path": "results/Presentation260817/NoiseAdder4FDemonstration",
+    # "image_path": "data/GroundTruth-800-v1/004.png",
+    "image_path": "data/GroundTruthNew/Plate1_sample/GeometryPlate_s01_00_cross.png",
+    "save_path": "results/OpticalExp260828",
 
     #====== Transformation for input image ======
     "transform_configs": [
@@ -147,16 +148,16 @@ ENCODER_CONFIG = {
     #====== SensorLayer ======
     "active_sensor": True, # switch
 
-    "crop_size": (64, 64), #(67.2, 67.2), #(288*2, 384*2),
+    "crop_size": (53.3333, 53.3333), #(67.2, 67.2), #(288*2, 384*2),
     "sensor_displacement": (0, 0),
 
     "sensor_psf_enabled": False, # switch, PSF (thermal diffusion)
     "sensor_psf_sigma": 1.0,
     "sensor_psf_kernel_size": 9, 
 
-    "use_target_resize": 128,  # force resize to target size after cropping, if None, would use the pitch ratio below
-    "simulation_pitch": 250,  # in um (micrometer)
-    "target_pitch": 250,  # in um (micrometer)
+    "use_target_resize": 288,  # force resize to target size after cropping, if None, would use the pitch ratio below
+    "simulation_pitch": 288,  # in um (micrometer)
+    "target_pitch": 53.3333,  # in um (micrometer)
 
     "bin_size": 1,
     "flip": True,

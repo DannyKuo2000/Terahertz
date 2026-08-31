@@ -22,7 +22,8 @@ from config import (
 from dataset import get_dataloaders
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
-from model.restormer250724 import Restormer
+# from model.restormer250724 import Restormer
+from model.Restormer260803 import Restormer
 
 
 def is_distributed():

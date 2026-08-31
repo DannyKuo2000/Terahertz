@@ -477,6 +477,7 @@ if __name__ == "__main__":
     bias = ENCODER_CONFIG["bias"]
     noise_level = ENCODER_CONFIG["noise_level"]
 
+    label = 0
     # 印出每層的 output (shape)
     for name, out in all_outputs: # 測試
         print(name, out.shape)    
@@ -494,3 +495,16 @@ if __name__ == "__main__":
 
         vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"{name}_abs.png"), normalize=False)
         print(f"[ONN DEBUG] Saved layer '{name}' intensity output")
+
+    if torch.is_complex(final_output):
+        img = (final_output.abs() ** 2)
+    else:
+        img = final_output.squeeze()
+
+    img = img * gain
+    noise = torch.randn_like(img) * noise_level
+    img = img + noise + bias
+    img = torch.clamp(img, 0, 1)
+
+    vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"final_output.png"), normalize=False)
+    print(f"[ONN DEBUG] Saved layer final_output intensity output")
