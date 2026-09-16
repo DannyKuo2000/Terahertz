@@ -280,11 +280,11 @@ RESTORMER_CONFIG = {
     "out_channels": 1,               # output channel number
 
     # Embedding & Blocks
-    "dim": 16,                 # initial dim
+    "dim": 8,                 # initial dim
     # "dim": 48,
-    # "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
-    "num_blocks": [2, 3, 3, 4],
-    "num_refinement_blocks": 2,
+    "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
+    # "num_blocks": [2, 3, 3, 4],
+    "num_refinement_blocks": 4,
     "heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
 
     # Feed-forward setup
@@ -314,10 +314,10 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN16Sblock_v1",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Restormer_ONN16Sblock_v1",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_v3",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Restormer_ONN8LBlock_v3",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": False,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/Restormer_ONN16Sblock_v1/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_v3/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -333,7 +333,7 @@ TRAINING_CONFIG = {
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN16Sblock_v1/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_v3/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Experiments hyperparameters ======
     # === Debug ===
@@ -341,15 +341,15 @@ TRAINING_CONFIG = {
     "profile_steps": 0,  # how many iteration to print out extra info
 
     # === Parallel ===
-    "distributed": False,  #!
-    "num_workers": 0,  # using 0 in single GPU
+    "distributed": True,  #!
+    "num_workers": 4,  # using 0 in single GPU
     
     # === Memory and Time Optimization ===
     "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
-    "grad_accum_steps": 4,  # number of mini batches  #!
+    "grad_accum_steps": 1,  # number of mini batches  #!
     
     # === Training hyperparameters ===
-    "global_batch_size": 10,  #!
+    "global_batch_size": 40,  #!
     "epochs": 500,
     "max_iterations": 300_000,
 
@@ -386,32 +386,28 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # === Parallel ===
-    "distributed": False,
-    "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 128,
+    "distributed": True,
+    "num_workers": 4,  # using 0 in single GPU
+    "batch_size": 512,#128,
 
     # # load config
     # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN16Sblock_v1',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v3',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './results/Restormer_ONN16Sblock_v1',  #! check before testing.
+    "results_save_dir": './results/Restormer_ONN8LBlock_v3',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
-    "save_latent_panel": True,
-    "latent_projection_mode": "mean_abs",  # mean_abs | max_abs | first_channel
-    "latent_resize_to_output": True,
-    "latent_cmap": "gray",
     "save_mse_ranked_panels": True,
     "save_mse_best_panel": False,
     "save_mse_middle_panel": True,
     "save_mse_bottom_panel": True,
-    "mse_panel_size": 50,
+    "mse_panel_size": 30,
     "mse_best_quantile_range": [0.0, 0.0],
-    "mse_middle_quantile_range": [0.4, 0.6],
-    "mse_bottom_quantile_range": [1.0, 1.0], #[0.9, 1.0],
+    "mse_middle_quantile_range": [0.45, 0.45],
+    "mse_bottom_quantile_range": [0.9, 1.0],
     "save_mse_ranked_csv": True,
     "save_psnr_distribution_table": True,
     "save_psnr_distribution_histogram": True,
@@ -439,11 +435,11 @@ LATENT_ANALYSIS_CONFIG = {
     # load config
     # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     # "weight_save_name": 'epoch99_Loss0.0005_20260731_203404.pth',
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN16Sblock_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v3',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/Restormer_ONN16Sblock_v1_analysis1',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_v3_analysis1',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes

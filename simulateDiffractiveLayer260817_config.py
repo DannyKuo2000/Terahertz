@@ -9,8 +9,18 @@
 
 ENCODER_CONFIG = {
     # "image_path": "data/GroundTruth-800-v1/004.png",
-    "image_path": "data/GroundTruthNew/Plate1_sample/GeometryPlate_s01_00_cross.png",
-    "save_path": "results/OpticalExp260828",
+    "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s01_00_cross.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s10_10_upper_B.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s11_20_lower_b.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s20_30_upper_D.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s21_40_upper_D.png",
+    # "save_path": "results/OpticalExp260908/GroundTruth-800-v1/004",
+    "save_path": "results/OpticalExp260908/Plate4_s01_00_cross",
+    # "save_path": "results/OpticalExp260908/Plate4_s10_10_upper_B",
+    # "save_path": "results/OpticalExp260908/Plate4_s11_20_lower_b",
+    # "save_path": "results/OpticalExp260908/Plate4_s20_30_upper_D",
+    # "save_path": "results/OpticalExp260908/Plate4_s21_40_upper_D",
+    # "save_path": "results/OpticalExp260915/Plate4_s01_00_cross",
 
     #====== Transformation for input image ======
     "transform_configs": [
@@ -26,19 +36,20 @@ ENCODER_CONFIG = {
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
     "use_input": False,  # use input source
-    "input": "other_data/NVLab260608/MultiSnap_2026-06-08_10-59-23_0265_0000.bmp",  # input source path
+    "input": "other_data/NVLab260907_fixed/MultiSnap_2026-09-07_20-04-46_0482_average.png",  # input source path
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
-    "created_size": (384, 384),  # size of gaussian beam
+    "created_size": (160, 160),  # size of gaussian beam
     "source_is_intensity": True,
 
-    "sigma": 0.2,  # sigma of gaussian
+    # only for gaussian source
+    "sigma": 0.01,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
     "center": (0.0, 0.0),  # center of gaussian(pixel)
     "rotation": 0.0,  # rotation of gaussian(angle)
     "aspect_ratio": 1.0,  # oval ratio
 
-    "crop_size_source": None,
-    "resize_size_source": (384, 384),
+    "crop_size_source": None,  # 0.03024 / 250um = 120.96, 0.04032 / 250um = 161.28
+    "resize_size_source": (160, 160),
     "displace_size_source": None,
     "pad_size_source": (384, 384),
 
@@ -48,6 +59,7 @@ ENCODER_CONFIG = {
     "diffractive_configs": [
         {
             "name": "ObjectToLens1",
+            # "z": 0.296,
             "z": 0.306,                  # distance (m)
             "dx": 0.00025,           # spatial resolution (m)
             "num_size": 384,           # size of each layer
@@ -82,6 +94,43 @@ ENCODER_CONFIG = {
             "mask_evanescent": False,
             "reverse_z": False,
         },
+        # {
+        #     "name": "SensorToLens3",
+        #     # "z": 0.296,
+        #     "z": 0.102,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": True,
+        # },
+        # {
+        #     "name": "Lens3ToLens4",
+        #     "z": 0.408,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": True,
+        # },
+        # {
+        #     "name": "Lens4ToObject",
+        #     "z": 0.306,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": True,
+        # },
         
     ],
     
@@ -142,6 +191,36 @@ ENCODER_CONFIG = {
             "frame_inner": None,
             "frame_outer": None,
         },
+        # {   # simulation range: dx * num_size
+        #     "name": "Lens3",
+        #     "focal_length": 0.102,
+        #     "dx": 0.00025,
+        #     "num_size": 384,
+        #     "pupil_type": "circular",
+        #     "pupil_radius": 0.0508, # 0.05 # radius usually in inches
+        #     "pupil_width": None,
+        #     "phase_model": "exact", # high NA: exact, NA ~ sin(arctan(r/f))
+        #     "mode": "forward",
+        #     "outside": "zero",
+        #     "frame": False,
+        #     "frame_inner": None,
+        #     "frame_outer": None,
+        # },
+        # {
+        #     "name": "Lens4",
+        #     "focal_length": 0.306,
+        #     "dx": 0.00025,
+        #     "num_size": 384, 
+        #     "pupil_type": "circular",
+        #     "pupil_radius": 0.0508, # 0.025 # radius usually in inches
+        #     "pupil_width": None,
+        #     "phase_model": "exact",
+        #     "mode": "forward",
+        #     "outside": "zero",
+        #     "frame": False,
+        #     "frame_inner": None,
+        #     "frame_outer": None,
+        # },
     ],
 
 
@@ -173,8 +252,8 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ====== simulate as Brightness and Contrast
-    "gain": 1,#0.1, 
-    "bias": 0/255,#80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
+    "gain": 1,#0.4,#0.1, 
+    "bias": 0/255,#80/255,#80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
     "noise_level": 0,
 }
 
@@ -189,6 +268,11 @@ OPTICAL_CHAIN = [
     {"type": "lens", "name": "Lens1", "index": 0},
     {"type": "diffractive", "name": "Lens1ToLens2", "index": 1},
     {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToCamera", "index": 2},
+    {"type": "diffractive", "name": "Lens2ToSensor", "index": 2},
+    # {"type": "diffractive", "name": "SensorToLens3", "index": 3},
+    # {"type": "lens", "name": "Lens3", "index": 2},
+    # {"type": "diffractive", "name": "Lens3ToLens4", "index": 4},
+    # {"type": "lens", "name": "Lens4", "index": 3},
+    # {"type": "diffractive", "name": "Lens4ToObject", "index": 5},
     {"type": "sensor", "name": "SensorLayer"},
 ]

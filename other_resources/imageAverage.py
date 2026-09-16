@@ -14,8 +14,10 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-input_dir = "other_data/NVLab260612/65"
-output_dir = "other_data/NVLab260612_averaged"
+# input_dir = "other_data/NVLab260909"
+input_dir = "other_data/NVLab260909/NVLab260909_4"
+# output_dir = "other_data/NVLab260909_averaged"
+output_dir = "other_data/NVLab260909/NVLab260909_4_averaged"
 os.makedirs(output_dir, exist_ok=True)
 
 exts = (".png", ".bmp", ".jpg", ".jpeg")

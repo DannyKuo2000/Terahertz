@@ -62,7 +62,7 @@ ENCODER_CONFIG = {
     "aspect_ratio": 1.0,  # oval ratio
 
     "crop_size_source": None,
-    "resize_size_source": (267, int(267*384/288)),
+    "resize_size_source": (384, 384),
     "displace_size_source": None,
     "pad_size_source": (384, 384),
 
@@ -196,8 +196,8 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ====== simulate as Brightness and Contrast
-    "gain": 1, 
-    "bias": 0/255, # should between 0 ~ 1, e.g. 0.001, 1/255
+    "gain": 0.1, 
+    "bias": 80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
     "noise_level": 0,
 }
 
@@ -338,9 +338,9 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # === Parallel ===
-    "distributed": True,
-    "num_workers": 4,  # using 0 in single GPU
-    "batch_size": 40,
+    "distributed": False,
+    "num_workers": 0,  # using 0 in single GPU
+    "batch_size": 128,
 
     # load config
     # "weight_save_dir": './checkpoints_weights/Baseline_4F_Restormer8_v1_0809/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights

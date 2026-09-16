@@ -1,8 +1,12 @@
 import csv
+import argparse
+import importlib.util
 import json
 import math
 import os
 import random
+import sys
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
@@ -14,18 +18,79 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from config import (
-    AUTOENCODER_CONFIG,
-    DATASET_CONFIG,
-    ENCODER_CONFIG,
-    RESTORMER_CONFIG,
-    TESTING_CONFIG,
-)
 from dataset import get_dataloaders
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import MaterialLayer, ONN
 # from model.restormer250724 import Restormer
 from model.Restormer260803 import Restormer
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Test the model with a selectable config file."
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a config .py file, e.g. config_lists/Baseline_4F_Restormer8_v1_0809_config.py",
+    )
+    parser.add_argument(
+        "--config-name",
+        type=str,
+        default=None,
+        help="Config name inside config_lists, e.g. Baseline_4F_Restormer8_v1_0809",
+    )
+    return parser.parse_known_args()[0]
+
+
+def load_config_module_from_path(config_path):
+    path = Path(config_path)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent / path
+
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    module_name = f"_runtime_config_{path.stem}_{abs(hash(str(path)))}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load config module from: {path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_runtime_config():
+    args = parse_args()
+
+    config_path = args.config
+    if args.config_name:
+        config_path = os.path.join(
+            "config_lists",
+            f"{args.config_name}_config.py",
+        )
+
+    if config_path is None:
+        import config as default_config
+
+        return default_config, "config.py"
+
+    module = load_config_module_from_path(config_path)
+    return module, config_path
+
+
+CONFIG_MODULE, CONFIG_SOURCE = load_runtime_config()
+
+AUTOENCODER_CONFIG = CONFIG_MODULE.AUTOENCODER_CONFIG
+DATASET_CONFIG = CONFIG_MODULE.DATASET_CONFIG
+ENCODER_CONFIG = CONFIG_MODULE.ENCODER_CONFIG
+RESTORMER_CONFIG = CONFIG_MODULE.RESTORMER_CONFIG
+TESTING_CONFIG = CONFIG_MODULE.TESTING_CONFIG
+
+print(f"[Config] Loaded from: {CONFIG_SOURCE}")
 
 def is_distributed():
     return dist.is_available() and dist.is_initialized()
@@ -115,9 +180,9 @@ def load_model(model, model_path):
     )
 
     if hasattr(model, "module"):
-        missing, unexpected = model.module.load_state_dict(state_dict, strict=False)
+        missing, unexpected = model.module.load_state_dict(state_dict, strict=True)  #!
     else:
-        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        missing, unexpected = model.load_state_dict(state_dict, strict=True)  #!
 
     model.eval()
     if is_main():
@@ -162,6 +227,59 @@ def select_reconstruction(outputs):
     if isinstance(outputs, (tuple, list)):
         return outputs[0]
     return outputs
+
+
+def get_model_core(model):
+    return model.module if hasattr(model, "module") else model
+
+
+def project_latent_for_viz(latent, config, target_size=None):
+    if isinstance(latent, (tuple, list)):
+        latent = latent[0]
+
+    if latent is None:
+        return None
+
+    if torch.is_complex(latent):
+        latent = torch.abs(latent)
+
+    if latent.dim() == 4:
+        projection_mode = config.get("latent_projection_mode", "mean_abs")
+        if projection_mode == "first_channel":
+            latent_map = latent[:, 0:1, :, :]
+        elif projection_mode == "max_abs":
+            latent_map = latent.abs().amax(dim=1, keepdim=True)
+        else:
+            latent_map = latent.abs().mean(dim=1, keepdim=True)
+    elif latent.dim() == 3:
+        latent_map = latent.unsqueeze(1)
+    elif latent.dim() == 2:
+        latent_map = latent.unsqueeze(0).unsqueeze(0)
+    else:
+        latent_map = latent.reshape(latent.shape[0], 1, -1, 1)
+
+    if target_size is not None and latent_map.shape[-2:] != target_size:
+        latent_map = F.interpolate(
+            latent_map.float(),
+            size=target_size,
+            mode="bilinear",
+            align_corners=False,
+        )
+
+    return latent_map.detach().cpu()
+
+
+def get_latent_cmap(config):
+    return config.get("latent_cmap", "gray")
+
+
+def get_latent_map(model, imgs, config, target_size=None):
+    net = get_model_core(model)
+    with torch.no_grad():
+        encoder_out = net.encoder(imgs)
+        latent = encoder_out[0] if isinstance(encoder_out, (tuple, list)) else encoder_out
+        latent_map = project_latent_for_viz(latent, config, target_size=target_size)
+    return latent_map
 
 
 def test_model(model):
@@ -253,22 +371,46 @@ def test_model(model):
     return None, None, None, global_mse, global_psnr, global_ssim
 
 
-def visualize_results(all_imgs, all_recons, model_name, num_image, config):
+def visualize_results(model, all_imgs, all_recons, model_name, num_image, config):
     os.makedirs(config["results_save_dir"], exist_ok=True)
     num_image = min(num_image, len(all_imgs), len(all_recons))
 
     imgs = all_imgs[:num_image]
     recons = all_recons[:num_image]
+    latent_enabled = config.get("save_latent_panel", True)
+    latent_maps = None
+    if latent_enabled:
+        latent_maps = get_latent_map(
+            model,
+            imgs.to(device),
+            config,
+            target_size=recons.shape[-2:] if config.get("latent_resize_to_output", True) else None,
+        )
+        latent_cmap = get_latent_cmap(config)
 
-    fig, axes = plt.subplots(2, num_image, figsize=(num_image * 2, 4))
+    rows = 3 if latent_enabled else 2
+    fig, axes = plt.subplots(rows, num_image, figsize=(num_image * 2, rows * 2))
+    if num_image == 1:
+        axes = axes.reshape(rows, 1)
     for i in range(num_image):
         axes[0, i].imshow(imgs[i].squeeze(), cmap="gray")
         axes[0, i].axis("off")
-        axes[1, i].imshow(recons[i].squeeze(), cmap="gray")
-        axes[1, i].axis("off")
+        if latent_enabled:
+            latent_img = latent_maps[i].squeeze().numpy()
+            axes[1, i].imshow(latent_img, cmap=latent_cmap)
+            axes[1, i].axis("off")
+            axes[2, i].imshow(recons[i].squeeze(), cmap="gray")
+            axes[2, i].axis("off")
+        else:
+            axes[1, i].imshow(recons[i].squeeze(), cmap="gray")
+            axes[1, i].axis("off")
 
     axes[0, 0].set_ylabel("Original", fontsize=12)
-    axes[1, 0].set_ylabel("Reconstructed", fontsize=12)
+    if latent_enabled:
+        axes[1, 0].set_ylabel("Latent", fontsize=12)
+        axes[2, 0].set_ylabel("Reconstructed", fontsize=12)
+    else:
+        axes[1, 0].set_ylabel("Reconstructed", fontsize=12)
     plt.tight_layout()
 
     save_path = os.path.join(config["results_save_dir"], f"{model_name}_image.png")
@@ -277,7 +419,7 @@ def visualize_results(all_imgs, all_recons, model_name, num_image, config):
     print(f"Visualization saved at {save_path}")
 
 
-def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config):
+def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config, model=None):
     if all_imgs is None or all_recons is None or not all_mses:
         return
 
@@ -351,9 +493,22 @@ def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config)
             return
 
         cols = len(indices)
-        fig, axes = plt.subplots(3, cols, figsize=(max(6, cols * 2.2), 6))
+        latent_enabled = config.get("save_latent_panel", True) and model is not None
+        rows = 4 if latent_enabled else 3
+        fig, axes = plt.subplots(rows, cols, figsize=(max(6, cols * 2.2), rows * 2))
         if cols == 1:
-            axes = axes.reshape(3, 1)
+            axes = axes.reshape(rows, 1)
+
+        selected_imgs = all_imgs[indices].to(device)
+        latent_maps = None
+        if latent_enabled:
+            latent_maps = get_latent_map(
+                model,
+                selected_imgs,
+                config,
+                target_size=all_recons[indices].shape[-2:] if config.get("latent_resize_to_output", True) else None,
+            )
+            latent_cmap = get_latent_cmap(config)
 
         for col, idx in enumerate(indices):
             img = all_imgs[idx].squeeze().numpy()
@@ -367,14 +522,27 @@ def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config)
                 f"#{idx}\nMSE={mse_val:.4g}\nPSNR={psnr_val:.2f}",
                 fontsize=9,
             )
-            axes[1, col].imshow(recon, cmap="gray")
-            axes[2, col].imshow(diff, cmap="magma")
-            for row in range(3):
+
+            if latent_enabled:
+                latent_img = latent_maps[col].squeeze().numpy()
+                axes[1, col].imshow(latent_img, cmap=latent_cmap)
+                axes[2, col].imshow(recon, cmap="gray")
+                axes[3, col].imshow(diff, cmap="magma")
+            else:
+                axes[1, col].imshow(recon, cmap="gray")
+                axes[2, col].imshow(diff, cmap="magma")
+
+            for row in range(rows):
                 axes[row, col].axis("off")
 
         axes[0, 0].set_ylabel("GT", fontsize=11)
-        axes[1, 0].set_ylabel("Recon", fontsize=11)
-        axes[2, 0].set_ylabel("Abs Diff", fontsize=11)
+        if latent_enabled:
+            axes[1, 0].set_ylabel("Latent", fontsize=11)
+            axes[2, 0].set_ylabel("Recon", fontsize=11)
+            axes[3, 0].set_ylabel("Abs Diff", fontsize=11)
+        else:
+            axes[1, 0].set_ylabel("Recon", fontsize=11)
+            axes[2, 0].set_ylabel("Abs Diff", fontsize=11)
         fig.suptitle(title, fontsize=14)
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         save_path = os.path.join(save_root, filename)
@@ -615,6 +783,7 @@ if __name__ == "__main__":
     if is_main():
         if all_imgs is not None and all_recons is not None:
             visualize_results(
+                model,
                 all_imgs,
                 all_recons,
                 model_name,
@@ -629,6 +798,7 @@ if __name__ == "__main__":
                     all_mses,
                     model_name,
                     TESTING_CONFIG,
+                    model=model,
                 )
 
             if TESTING_CONFIG.get("save_psnr_distribution_table", True):
@@ -646,3 +816,6 @@ if __name__ == "__main__":
     if distributed and is_distributed():
         dist.barrier()
         dist.destroy_process_group()
+
+# Running command example:
+# python test.py --config config_lists/Restormer_ONN8LBlock_v2_config.py    

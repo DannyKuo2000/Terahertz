@@ -13,7 +13,7 @@ fix_dead_pixels.py (學長寫的)
 
 # 批次資料夾（只抓 *.png），座標同一份
     python fix_dead_pixels.py ./imgs --glob "*.png" --coord-file bad_points.txt --outdir out
-    python other_resources\fix_dead_pixels.py other_data\NVLab260519_averaged --glob "*.bmp" --coord-file other_resources\bad_points.txt --outdir other_data\NVLab260519_fixed
+    python other_resources/fix_dead_pixels.py other_data/NVLab260519_averaged --glob "*.bmp" --coord-file other_resources/bad_points.txt --outdir other_data/NVLab260519_fixed
 
 檔案格式說明：
     coord-file：純文字或 CSV，每行一組「y,x」，例如：

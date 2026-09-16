@@ -3,18 +3,27 @@
 __pycache__/
 *.pyc
 
-
-# Data / Results / Checkpoints
+# Checkpoints
 checkpoints_weights/
 checkpoints/
-results/
 runs/
+
+# Data
 data/
+data.zip
 other_data/
+
+# Results
+results/
 inference_results/
 latent_analysis/
 sample_data/
+
+# Environment
 .Research_NVLabServer/
 
-data.zip
+# Logs
 ExperimentsRecord.xlsx
+
+# STL files
+*.stl
