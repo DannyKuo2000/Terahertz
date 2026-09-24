@@ -9,19 +9,30 @@
 
 ENCODER_CONFIG = {
     # "image_path": "data/GroundTruth-800-v1/004.png",
-    "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s01_00_cross.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s01_00_cross.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s10_10_upper_B.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s11_20_lower_b.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s20_30_upper_D.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s21_40_upper_D.png",
+    # "image_path": "other_data/GeneratedObjects/center_square.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s13_22_lower_b.png",
+    "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s07_13_lower_a.png",
+    "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s09_11_upper_B.png",
+    "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s17_33_lower_C.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s19_31_lower_C.png",
+
     # "save_path": "results/OpticalExp260908/GroundTruth-800-v1/004",
-    "save_path": "results/OpticalExp260908/Plate4_s01_00_cross",
+    # "save_path": "results/OpticalExp260908/Plate4_s01_00_cross",
     # "save_path": "results/OpticalExp260908/Plate4_s10_10_upper_B",
     # "save_path": "results/OpticalExp260908/Plate4_s11_20_lower_b",
     # "save_path": "results/OpticalExp260908/Plate4_s20_30_upper_D",
     # "save_path": "results/OpticalExp260908/Plate4_s21_40_upper_D",
     # "save_path": "results/OpticalExp260915/Plate4_s01_00_cross",
-
+    # "save_path": "results/GeneratedObjects/center_square",
+    "save_path": "results/OpticalExp260921/Plate4_s07_13_lower_a",
+    "save_path": "results/OpticalExp260921/Plate4_s09_11_upper_B",
+    "save_path": "results/OpticalExp260921/Plate4_s17_33_lower_C",
+    # "save_path": "results/OpticalExp260921/Plate4_s19_31_lower_C",
     #====== Transformation for input image ======
     "transform_configs": [
         {
@@ -82,6 +93,30 @@ ENCODER_CONFIG = {
             "mask_evanescent": False,
             "reverse_z": False,
         },
+        # {
+        #     "name": "Lens1ToLens2_1",
+        #     "z": 0.306,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": False,
+        # },
+        # {
+        #     "name": "Lens1ToLens2_2",
+        #     "z": 0.102,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": False,
+        # },
         {
             "name": "Lens2ToSensor",
             "z": 0.102,                  # distance (m)
@@ -252,10 +287,11 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ====== simulate as Brightness and Contrast
-    "gain": 1,#0.4,#0.1, 
-    "bias": 0/255,#80/255,#80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
+    "gain": 0.2,#0.4,#0.1, 
+    "bias": 70/255,#80/255,#80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
     "noise_level": 0,
 }
+
 
 # --------------------------------------------------
 # Optical Chain Configuration
@@ -263,16 +299,34 @@ ENCODER_CONFIG = {
 # This chain controls the execution order of the optical simulation.
 # You can reorder, insert, or remove layers here without changing model code.
 OPTICAL_CHAIN = [
+    # {"type": "source", "name": "SourceLayer"},
+    # {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
+    # {"type": "lens", "name": "Lens1", "index": 0},
+    # {"type": "diffractive", "name": "Lens1ToLens2_1", "index": 1},
+    # {"type": "diffractive", "name": "Lens1ToLens2_2", "index": 2},
+    # {"type": "lens", "name": "Lens2", "index": 1},
+    # {"type": "diffractive", "name": "Lens2ToSensor", "index": 3},
+    # {"type": "diffractive", "name": "SensorToLens3", "index": 3},
+    # {"type": "lens", "name": "Lens3", "index": 2},
+    # {"type": "diffractive", "name": "Lens3ToLens4", "index": 4},
+    # {"type": "lens", "name": "Lens4", "index": 3},
+    # {"type": "diffractive", "name": "Lens4ToObject", "index": 5},
+    # {"type": "sensor", "name": "SensorLayer"},
+
     {"type": "source", "name": "SourceLayer"},
     {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
     {"type": "lens", "name": "Lens1", "index": 0},
     {"type": "diffractive", "name": "Lens1ToLens2", "index": 1},
     {"type": "lens", "name": "Lens2", "index": 1},
     {"type": "diffractive", "name": "Lens2ToSensor", "index": 2},
-    # {"type": "diffractive", "name": "SensorToLens3", "index": 3},
-    # {"type": "lens", "name": "Lens3", "index": 2},
-    # {"type": "diffractive", "name": "Lens3ToLens4", "index": 4},
-    # {"type": "lens", "name": "Lens4", "index": 3},
-    # {"type": "diffractive", "name": "Lens4ToObject", "index": 5},
     {"type": "sensor", "name": "SensorLayer"},
+
+    # {"type": "source", "name": "SourceLayer"},
+    # {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
+    # {"type": "lens", "name": "Lens1", "index": 0},
+    # {"type": "diffractive", "name": "Lens1ToLens2_1", "index": 1},
+    # {"type": "diffractive", "name": "Lens1ToLens2_2", "index": 2},
+    # {"type": "lens", "name": "Lens2", "index": 1},
+    # {"type": "diffractive", "name": "Lens2ToSensor", "index": 3},
+    # {"type": "diffractive", "name": "SensorToLens3", "index": 3},
 ]

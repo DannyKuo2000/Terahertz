@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 
+
 # Checkpoints
 checkpoints_weights/
 checkpoints/
@@ -27,3 +28,6 @@ ExperimentsRecord.xlsx
 
 # STL files
 *.stl
+
+# PNG 
+*.png
