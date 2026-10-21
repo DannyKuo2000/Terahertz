@@ -10,9 +10,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 import os
+import math
+from pathlib import Path
 from PIL import Image
+from scipy.ndimage import map_coordinates
 from model.opticalSimulation import DiffractiveLayer, LensLayer, CropResizeDisplacePad, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
-from simulateDiffractiveLayer260917_config import ENCODER_CONFIG
+from imagingSystemOfficialVersion_config import ENCODER_CONFIG
 
 # ====== Image Loader ======
 def load_image(path, cut=None, size=None):
@@ -86,6 +89,11 @@ class ONN(nn.Module):
         mode_source = config["mode_source"]
         created_size = config["created_size"]
         source_is_intensity = config["source_is_intensity"]
+        phase_mode = config.get("source_phase_mode", "none")
+        phase_strength = config.get("source_phase_strength", 0.0)
+        phase_angle_deg = config.get("source_phase_angle_deg", 0.0)
+        phase_center = config.get("source_phase_center", (0.0, 0.0))
+        phase_seed = config.get("source_phase_seed", 0)
 
         sigma = config["sigma"]
         amplitude = config["amplitude"]
@@ -139,6 +147,11 @@ class ONN(nn.Module):
                 "mode": mode_source,
                 "created_size": created_size,
                 "source_is_intensity": source_is_intensity,
+                "phase_mode": phase_mode,
+                "phase_strength": phase_strength,
+                "phase_angle_deg": phase_angle_deg,
+                "phase_center": phase_center,
+                "phase_seed": phase_seed,
                 "sigma": sigma,
                 "amplitude": amplitude,
                 "center": center,
@@ -321,10 +334,19 @@ class ONN(nn.Module):
                 center=center,
                 rotation=rotation,
                 aspect_ratio=aspect_ratio,
+
+                phase_mode=phase_mode,
+                phase_strength=phase_strength,
+                phase_angle_deg=phase_angle_deg,
+                phase_center=phase_center,
+                phase_seed=phase_seed,
+
                 crop_size_source=crop_size_source,
                 resize_size_source=resize_size_source,
                 displace_size_source=displace_size_source,
                 pad_size_source=pad_size_source,
+
+                
             )
         )
         self.layer_names.append(f"{total_index}_SourceLayer")
@@ -457,7 +479,7 @@ class ONN(nn.Module):
 
         return x
 
-if __name__ == "__main__":
+if __name__ == "__main__" and False:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(ENCODER_CONFIG["save_path"], exist_ok=True)
 
@@ -472,6 +494,7 @@ if __name__ == "__main__":
 
     # forward，要求所有中間 layer output
     final_output, all_outputs = model(E0, return_intermediate=True)
+    frequency_scale = 3.0
 
     gain = ENCODER_CONFIG["gain"]
     bias = ENCODER_CONFIG["bias"]
@@ -508,3 +531,149 @@ if __name__ == "__main__":
 
     vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"final_output.png"), normalize=False)
     print(f"[ONN DEBUG] Saved layer final_output intensity output")
+
+
+def save_frequency_scaled_output(img, output_dir, frequency_scale=5.0, output_prefix="final_output"):
+    """Scale FFT frequency coordinates and transform the result back to space."""
+    image = img.detach().float().cpu().squeeze().numpy()
+    spectrum = np.fft.fftshift(np.fft.fft2(image))
+    height, width = image.shape
+    cy, cx = height // 2, width // 2
+
+    magnitude = np.log1p(np.abs(spectrum))
+    magnitude = (magnitude - magnitude.min()) / (np.ptp(magnitude) + 1e-12)
+    Image.fromarray(np.rint(magnitude * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_spectrum.png")
+    )
+
+    # At each target frequency f, sample the original spectrum at scale*f.
+    # Values outside the original Nyquist range are set to zero.
+    yy, xx = np.indices((height, width), dtype=np.float64)
+    source_y = cy + (yy - cy) / frequency_scale
+    source_x = cx + (xx - cx) / frequency_scale
+    real = map_coordinates(spectrum.real, [source_y, source_x], order=1, mode="constant")
+    imag = map_coordinates(spectrum.imag, [source_y, source_x], order=1, mode="constant")
+    scaled_spectrum = real + 1j * imag
+
+    scaled_magnitude = np.log1p(np.abs(scaled_spectrum))
+    scaled_magnitude = (scaled_magnitude - scaled_magnitude.min()) / (
+        np.ptp(scaled_magnitude) + 1e-12
+    )
+    Image.fromarray(np.rint(scaled_magnitude * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_spectrum_scaled{frequency_scale:g}.png")
+    )
+
+    reconstructed = np.fft.ifft2(np.fft.ifftshift(scaled_spectrum)).real
+    reconstructed -= reconstructed.min()
+    reconstructed /= reconstructed.max() + 1e-12
+    Image.fromarray(np.rint(reconstructed * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_freq{frequency_scale:g}.png")
+    )
+
+
+def process_image(path, output_dir, model, device, save_frequency_outputs=False):
+    os.makedirs(output_dir, exist_ok=True)
+    I0 = load_image(str(path))
+    print(f"Processing: {path} (size={I0.size})")
+    E0 = torch.from_numpy(np.sqrt(I0)).to(device).type(torch.complex64)
+    E0 = E0.unsqueeze(0).unsqueeze(0)
+    final_output, all_outputs = model(E0, return_intermediate=True)
+    frequency_scale = 1.0 / 3.0
+    gain = ENCODER_CONFIG["gain"]
+    bias = ENCODER_CONFIG["bias"]
+    noise_level = ENCODER_CONFIG["noise_level"]
+
+    def save_intensity(tensor, filename):
+        if torch.is_complex(tensor):
+            img = tensor.abs() ** 2
+        else:
+            img = tensor.squeeze()
+        img = torch.clamp(img * gain + torch.randn_like(img) * noise_level + bias, 0, 1)
+        vutils.save_image(img, os.path.join(output_dir, filename), normalize=False)
+        return img
+
+    for name, out in all_outputs:
+        print(name, out.shape)
+        layer_img = save_intensity(out, f"{name}_abs.png")
+        if save_frequency_outputs and "Lens2ToSensor" in name:
+            save_frequency_scaled_output(
+                layer_img,
+                output_dir,
+                frequency_scale=frequency_scale,
+                output_prefix="Lens2ToSensor",
+            )
+        if "SourceLayer" in name and torch.is_complex(out):
+            # Map phase from [-pi, pi] to [0, 1] for grayscale PNG output.
+            phase_image = (torch.angle(out).squeeze() + torch.pi) / (2 * torch.pi)
+            phase_image = torch.clamp(phase_image, 0, 1)
+            vutils.save_image(
+                phase_image,
+                os.path.join(output_dir, f"{name}_phase.png"),
+                normalize=False,
+            )
+            print(f"[ONN DEBUG] Saved SourceLayer phase output: {name}_phase.png")
+    if torch.is_complex(final_output):
+        final_img = final_output.abs() ** 2
+    else:
+        final_img = final_output.squeeze()
+    final_img = torch.clamp(
+        final_img * gain + torch.randn_like(final_img) * noise_level + bias, 0, 1
+    )
+    vutils.save_image(final_img, os.path.join(output_dir, "final_output.png"), normalize=False)
+    if save_frequency_outputs:
+        save_frequency_scaled_output(final_img, output_dir, frequency_scale=frequency_scale)
+    return Path(output_dir) / "final_output.png"
+
+
+def create_final_output_grid(final_output_paths, save_path):
+    """Combine all per-image final outputs into one overview image."""
+    images = [Image.open(path).convert("L") for path in final_output_paths]
+    tile_width = max(image.width for image in images)
+    tile_height = max(image.height for image in images)
+    columns = math.ceil(math.sqrt(len(images)))
+    rows = math.ceil(len(images) / columns)
+    grid = Image.new("L", (columns * tile_width, rows * tile_height), color=0)
+    for index, image in enumerate(images):
+        if image.size != (tile_width, tile_height):
+            image = image.resize((tile_width, tile_height), Image.Resampling.NEAREST)
+        x = (index % columns) * tile_width
+        y = (index // columns) * tile_height
+        grid.paste(image, (x, y))
+    grid.save(save_path)
+    print(f"[ONN DEBUG] Saved combined final outputs: {save_path}")
+
+
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    input_path = Path(ENCODER_CONFIG["image_path"])
+    save_root = Path(ENCODER_CONFIG["save_path"])
+    extensions = tuple(ext.lower() for ext in ENCODER_CONFIG.get(
+        "image_extensions", (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+    ))
+    if input_path.is_dir():
+        image_paths = sorted(p for p in input_path.iterdir()
+                                if p.is_file() and p.suffix.lower() in extensions)
+        if not image_paths:
+            raise FileNotFoundError(f"資料夾中找不到支援的影像檔: {input_path}")
+    elif input_path.is_file():
+        image_paths = [input_path]
+    else:
+        raise FileNotFoundError(f"找不到輸入影像或資料夾: {input_path}")
+
+    model = ONN().to(device)
+    model.eval()
+    with torch.no_grad():
+        final_output_paths = []
+        for path in image_paths:
+            output_dir = save_root if len(image_paths) == 1 else save_root / path.stem
+            final_output_paths.append(process_image(
+                path, output_dir, model, device,
+                save_frequency_outputs=True,
+            ))
+
+        if len(image_paths) > 1:
+            save_root.mkdir(parents=True, exist_ok=True)
+            create_final_output_grid(
+                final_output_paths,
+                save_root / "all_final_outputs.png",
+            )

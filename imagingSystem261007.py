@@ -10,9 +10,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torchvision.utils as vutils
 import os
-from PIL import Image
+import math
+from pathlib import Path
+from PIL import Image, ImageDraw
+from scipy.ndimage import map_coordinates
 from model.opticalSimulation import DiffractiveLayer, LensLayer, CropResizeDisplacePad, RadialAttenuationLayer, SensorLayer, SensorNoiseLayer, SourceLayer, MaterialLayer
-from simulateDiffractiveLayer260818_config import ENCODER_CONFIG
+from imagingSystem261007_config import ENCODER_CONFIG
 
 # ====== Image Loader ======
 def load_image(path, cut=None, size=None):
@@ -86,6 +89,11 @@ class ONN(nn.Module):
         mode_source = config["mode_source"]
         created_size = config["created_size"]
         source_is_intensity = config["source_is_intensity"]
+        phase_mode = config.get("source_phase_mode", "none")
+        phase_strength = config.get("source_phase_strength", 0.0)
+        phase_angle_deg = config.get("source_phase_angle_deg", 0.0)
+        phase_center = config.get("source_phase_center", (0.0, 0.0))
+        phase_seed = config.get("source_phase_seed", 0)
 
         sigma = config["sigma"]
         amplitude = config["amplitude"]
@@ -120,9 +128,9 @@ class ONN(nn.Module):
         noise_std = config["noise_std"]
 
         # Final process
-        self.gain = config["gain"]
-        self.bias = config["bias"]
-        self.noise_level = config["noise_level"]
+        # self.gain = config["gain"]
+        # self.bias = config["bias"]
+        # self.noise_level = config["noise_level"]
 
 
         # wavelength
@@ -139,6 +147,11 @@ class ONN(nn.Module):
                 "mode": mode_source,
                 "created_size": created_size,
                 "source_is_intensity": source_is_intensity,
+                "phase_mode": phase_mode,
+                "phase_strength": phase_strength,
+                "phase_angle_deg": phase_angle_deg,
+                "phase_center": phase_center,
+                "phase_seed": phase_seed,
                 "sigma": sigma,
                 "amplitude": amplitude,
                 "center": center,
@@ -274,6 +287,7 @@ class ONN(nn.Module):
                     raise ValueError(f"Unknown optical chain layer type: {layer_type}")
 
             print(f"[ONN] Built from OPTICAL_CHAIN with {len(self.layers)} layers")
+            print("[ONN] Layer order: " + " -> ".join(self.layer_names))
             return
 
         # information reminder
@@ -321,10 +335,19 @@ class ONN(nn.Module):
                 center=center,
                 rotation=rotation,
                 aspect_ratio=aspect_ratio,
+
+                phase_mode=phase_mode,
+                phase_strength=phase_strength,
+                phase_angle_deg=phase_angle_deg,
+                phase_center=phase_center,
+                phase_seed=phase_seed,
+
                 crop_size_source=crop_size_source,
                 resize_size_source=resize_size_source,
                 displace_size_source=displace_size_source,
                 pad_size_source=pad_size_source,
+
+                
             )
         )
         self.layer_names.append(f"{total_index}_SourceLayer")
@@ -443,7 +466,8 @@ class ONN(nn.Module):
                     phase_list.append(out[1])
             else:
                 x = out
-            x = x * self.gain + self.bias #! temporary
+            # x = x * self.gain + self.bias #! temporary
+            print(f"[ONN] Layer {name}: output shape={tuple(x.shape)}")
             outputs.append((name, x.detach().clone()))
 
         if return_intermediate and self.return_phases:
@@ -457,7 +481,7 @@ class ONN(nn.Module):
 
         return x
 
-if __name__ == "__main__":
+if __name__ == "__main__" and False:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(ENCODER_CONFIG["save_path"], exist_ok=True)
 
@@ -472,10 +496,13 @@ if __name__ == "__main__":
 
     # forward，要求所有中間 layer output
     final_output, all_outputs = model(E0, return_intermediate=True)
+    frequency_scale = 3.0
 
     gain = ENCODER_CONFIG["gain"]
+    bias = ENCODER_CONFIG["bias"]
     noise_level = ENCODER_CONFIG["noise_level"]
 
+    label = 0
     # 印出每層的 output (shape)
     for name, out in all_outputs: # 測試
         print(name, out.shape)    
@@ -488,8 +515,300 @@ if __name__ == "__main__":
         
         img = img * gain
         noise = torch.randn_like(img) * noise_level
-        img = img + noise
+        img = img + noise + bias
         img = torch.clamp(img, 0, 1)
 
         vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"{name}_abs.png"), normalize=False)
         print(f"[ONN DEBUG] Saved layer '{name}' intensity output")
+
+    if torch.is_complex(final_output):
+        img = (final_output.abs() ** 2)
+    else:
+        img = final_output.squeeze()
+
+    img = img * gain
+    noise = torch.randn_like(img) * noise_level
+    img = img + noise + bias
+    img = torch.clamp(img, 0, 1)
+
+    vutils.save_image(img, os.path.join(ENCODER_CONFIG["save_path"], f"final_output.png"), normalize=False)
+    print(f"[ONN DEBUG] Saved layer final_output intensity output")
+
+
+def field_to_numpy(tensor):
+    """Return the complex field for FFT analysis.
+
+    Complex layer outputs are used directly. Real outputs are interpreted as
+    intensity and converted to amplitude with sqrt(I).
+    """
+    if torch.is_complex(tensor):
+        return tensor.detach().cpu().squeeze().numpy()
+    intensity = tensor.detach().float().cpu().squeeze().numpy()
+    return np.sqrt(np.clip(intensity, 0.0, None))
+
+
+def save_frequency_scaled_output(img, output_dir, frequency_scale=5.0, output_prefix="final_output"):
+    """Scale FFT frequency coordinates and transform the result back to space."""
+    field = field_to_numpy(img)
+    spectrum = np.fft.fftshift(np.fft.fft2(field))
+    height, width = field.shape
+    cy, cx = height // 2, width // 2
+
+    magnitude = np.log1p(np.abs(spectrum))
+    magnitude = (magnitude - magnitude.min()) / (np.ptp(magnitude) + 1e-12)
+    Image.fromarray(np.rint(magnitude * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_spectrum.png")
+    )
+
+    # At each target frequency f, sample the original spectrum at scale*f.
+    # Values outside the original Nyquist range are set to zero.
+    yy, xx = np.indices((height, width), dtype=np.float64)
+    source_y = cy + (yy - cy) / frequency_scale
+    source_x = cx + (xx - cx) / frequency_scale
+    real = map_coordinates(spectrum.real, [source_y, source_x], order=1, mode="constant")
+    imag = map_coordinates(spectrum.imag, [source_y, source_x], order=1, mode="constant")
+    scaled_spectrum = real + 1j * imag
+    save_radial_profile(
+        scaled_spectrum,
+        output_dir,
+        f"{output_prefix}_spectrum_freqScaled{frequency_scale:.3f}",
+    )
+
+    scaled_magnitude = np.log1p(np.abs(scaled_spectrum))
+    scaled_magnitude = (scaled_magnitude - scaled_magnitude.min()) / (
+        np.ptp(scaled_magnitude) + 1e-12
+    )
+    Image.fromarray(np.rint(scaled_magnitude * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_spectrum_freqScaled{frequency_scale:.3f}.png")
+    )
+
+    reconstructed = np.fft.ifft2(np.fft.ifftshift(scaled_spectrum)).real
+    reconstructed -= reconstructed.min()
+    reconstructed /= reconstructed.max() + 1e-12
+    Image.fromarray(np.rint(reconstructed * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_freqScaled{frequency_scale:.3f}.png")
+    )
+    return scaled_magnitude
+
+
+def save_radial_profile(spectrum, output_dir, output_prefix):
+    """Save mean spectral magnitude as a function of radius from DC."""
+    cutoff_threshold = 1e-12
+    magnitude = np.abs(spectrum)
+    height, width = magnitude.shape
+    cy, cx = height // 2, width // 2
+    yy, xx = np.indices((height, width))
+    radius = np.rint(np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)).astype(np.int32)
+    counts = np.bincount(radius.ravel())
+    radial_mean = np.bincount(radius.ravel(), weights=magnitude.ravel()) / np.maximum(counts, 1)
+
+    below_threshold = radial_mean < cutoff_threshold
+    cutoff_bin = None
+    for index in range(len(radial_mean)):
+        if below_threshold[index:] .all():
+            cutoff_bin = index
+            break
+
+    figure, axis = plt.subplots(figsize=(8, 5))
+    axis.plot(np.arange(len(radial_mean)), radial_mean, linewidth=1.2)
+    axis.set_title(f"Radial spectrum profile: {output_prefix}")
+    axis.set_xlabel("Frequency radius (FFT pixels)")
+    axis.set_ylabel("Mean |F|")
+    axis.set_yscale("log")
+    axis.grid(True, which="both", alpha=0.3)
+    if cutoff_bin is not None:
+        axis.axvline(cutoff_bin, color="red", linestyle="--", linewidth=1.2,label=f"cutoff bin = {cutoff_bin}")
+        axis.text(
+            cutoff_bin,
+            cutoff_threshold,
+            f"  bin {cutoff_bin}\n  < {cutoff_threshold:.0e}",
+            color="red",
+            va="bottom",
+        )
+        axis.legend()
+        print(f"[FFT] {output_prefix}: cutoff begins at bin {cutoff_bin} "f"(threshold={cutoff_threshold:.0e})")
+    else:
+        print(f"[FFT] {output_prefix}: no cutoff below {cutoff_threshold:.0e}")
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, f"{output_prefix}_radial_profile.png"), dpi=150)
+    plt.close(figure)
+    return radial_mean
+
+
+def save_spectrum(img, output_dir, output_prefix):
+    field = field_to_numpy(img)
+    spectrum = np.fft.fftshift(np.fft.fft2(field))
+    magnitude = np.log1p(np.abs(spectrum))
+    magnitude = (magnitude - magnitude.min()) / (np.ptp(magnitude) + 1e-12)
+    Image.fromarray(np.rint(magnitude * 255).astype(np.uint8)).save(
+        os.path.join(output_dir, f"{output_prefix}_spectrum.png")
+    )
+    return magnitude
+
+
+def process_image(path, output_dir, model, device, save_frequency_outputs=False):
+    os.makedirs(output_dir, exist_ok=True)
+    I0 = load_image(str(path))
+    print(f"Processing: {path} (size={I0.size})")
+    E0 = torch.from_numpy(np.sqrt(I0)).to(device).type(torch.complex64)
+    E0 = E0.unsqueeze(0).unsqueeze(0)
+    final_output, all_outputs = model(E0, return_intermediate=True)
+    frequency_scale = ENCODER_CONFIG["frequency_scale"]
+    gain = ENCODER_CONFIG["gain"]
+    bias = ENCODER_CONFIG["bias"]
+    noise_level = ENCODER_CONFIG["noise_level"]
+
+    def save_intensity(tensor, filename):
+        if torch.is_complex(tensor):
+            img = tensor.abs() ** 2
+        else:
+            img = tensor.squeeze()
+        img = torch.clamp(img * gain + torch.randn_like(img) * noise_level + bias, 0, 1)
+        vutils.save_image(img, os.path.join(output_dir, filename), normalize=False)
+        return img
+
+    source_spectrum = None
+    lens_scaled_spectrum = None
+    source_radial = None
+    sensor_radial = None
+    lens_radial = None
+    for name, out in all_outputs:
+        layer_img = save_intensity(out, f"{name}_abs.png")
+        if save_frequency_outputs and "Lens2ToSensor" in name:
+            lens_field = field_to_numpy(out)
+            lens_spectrum = np.fft.fftshift(np.fft.fft2(lens_field))
+            lens_radial = save_radial_profile(lens_spectrum, output_dir, name)
+            lens_scaled_spectrum = save_frequency_scaled_output(
+                out,
+                output_dir,
+                frequency_scale=frequency_scale,
+                output_prefix="Lens2ToSensor",
+            )
+        if save_frequency_outputs and "SourceLayer" in name:
+            source_spectrum = save_spectrum(out, output_dir, name)
+            source_field = field_to_numpy(out)
+            source_fft = np.fft.fftshift(np.fft.fft2(source_field))
+            source_radial = save_radial_profile(source_fft, output_dir, name)
+        if save_frequency_outputs and "SensorLayer" in name:
+            sensor_field = field_to_numpy(out)
+            sensor_spectrum = np.fft.fftshift(np.fft.fft2(sensor_field))
+            sensor_radial = save_radial_profile(sensor_spectrum, output_dir, name)
+        if "SourceLayer" in name and torch.is_complex(out):
+            # Map phase from [-pi, pi] to [0, 1] for grayscale PNG output.
+            phase_image = (torch.angle(out).squeeze() + torch.pi) / (2 * torch.pi)
+            phase_image = torch.clamp(phase_image, 0, 1)
+            vutils.save_image(
+                phase_image,
+                os.path.join(output_dir, f"{name}_phase.png"),
+                normalize=False,
+            )
+            print(f"[ONN DEBUG] Saved SourceLayer phase output: {name}_phase.png")
+
+    if source_radial is not None and sensor_radial is not None and lens_radial is not None:
+        figure, axis = plt.subplots(figsize=(8, 5))
+        axis.plot(np.arange(len(source_radial)), source_radial,
+                  label="2_SourceLayer_abs", linewidth=1.2)
+        axis.plot(np.arange(len(sensor_radial)), sensor_radial,
+                  label="8_SensorLayer_abs", linewidth=1.2)
+        axis.plot(np.arange(len(lens_radial)), lens_radial,
+                  label="7_Lens2ToSensor_abs", linewidth=1.2)
+        axis.set_title("SourceLayer vs Lens2ToSensor vs SensorLayer radial spectrum")
+        axis.set_xlabel("Frequency radius (FFT pixels)")
+        axis.set_ylabel("Mean |F|")
+        axis.set_yscale("log")
+        axis.grid(True, which="both", alpha=0.3)
+        axis.legend()
+        figure.tight_layout()
+        figure.savefig(
+            os.path.join(output_dir, "SourceLayer_vs_Lens2ToSensor_vs_SensorLayer_radial_profile.png"),
+            dpi=150,
+        )
+        plt.close(figure)
+    if source_spectrum is not None and lens_scaled_spectrum is not None:
+        comparison = np.concatenate((source_spectrum, lens_scaled_spectrum), axis=1)
+        Image.fromarray(np.rint(comparison * 255).astype(np.uint8)).save(
+            os.path.join(output_dir, "SourceLayer_vs_Lens2ToSensor_spectrum.png")
+        )
+    if torch.is_complex(final_output):
+        final_img = final_output.abs() ** 2
+    else:
+        final_img = final_output.squeeze()
+    final_img = torch.clamp(
+        final_img * gain + torch.randn_like(final_img) * noise_level + bias, 0, 1
+    )
+    vutils.save_image(final_img, os.path.join(output_dir, "final_output.png"), normalize=False)
+    # Mark the geometrical centre with one vertical and one horizontal red line.
+    final_uint8 = np.rint(final_img.detach().float().cpu().squeeze().numpy() * 255).clip(0, 255).astype(np.uint8)
+    final_marked = Image.fromarray(final_uint8).convert("RGB")
+    draw = ImageDraw.Draw(final_marked)
+    center_x = final_marked.width // 2
+    center_y = final_marked.height // 2
+    draw.line((center_x, 0, center_x, final_marked.height - 1), fill=(255, 0, 0), width=1)
+    draw.line((0, center_y, final_marked.width - 1, center_y), fill=(255, 0, 0), width=1)
+    final_marked.save(os.path.join(output_dir, "final_output_center_marked.png"))
+    # final output frequency scaling
+    # if save_frequency_outputs:  
+    #     save_frequency_scaled_output(final_img, output_dir, frequency_scale=frequency_scale)
+    return Path(output_dir) / "final_output.png"
+
+
+def create_final_output_grid(final_output_paths, save_path):
+    """Combine all per-image final outputs into one overview image."""
+    images = [Image.open(path).convert("RGB") for path in final_output_paths]
+    tile_width = max(image.width for image in images)
+    tile_height = max(image.height for image in images)
+    columns = math.ceil(math.sqrt(len(images)))
+    rows = math.ceil(len(images) / columns)
+    grid = Image.new("RGB", (columns * tile_width, rows * tile_height), color=(0, 0, 0))
+    for index, image in enumerate(images):
+        if image.size != (tile_width, tile_height):
+            image = image.resize((tile_width, tile_height), Image.Resampling.NEAREST)
+        x = (index % columns) * tile_width
+        y = (index // columns) * tile_height
+        grid.paste(image, (x, y))
+    grid.save(save_path)
+    print(f"[ONN DEBUG] Saved combined final outputs: {save_path}")
+
+
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    input_path = Path(ENCODER_CONFIG["image_path"])
+    save_root = Path(ENCODER_CONFIG["save_path"])
+    extensions = tuple(ext.lower() for ext in ENCODER_CONFIG.get(
+        "image_extensions", (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+    ))
+    if input_path.is_dir():
+        image_paths = sorted(p for p in input_path.iterdir()
+                                if p.is_file() and p.suffix.lower() in extensions)
+        if not image_paths:
+            raise FileNotFoundError(f"資料夾中找不到支援的影像檔: {input_path}")
+    elif input_path.is_file():
+        image_paths = [input_path]
+    else:
+        raise FileNotFoundError(f"找不到輸入影像或資料夾: {input_path}")
+
+    model = ONN().to(device)
+    model.eval()
+    with torch.no_grad():
+        final_output_paths = []
+        for path in image_paths:
+            output_dir = save_root if len(image_paths) == 1 else save_root / path.stem
+            final_output_paths.append(process_image(
+                path, output_dir, model, device,
+                save_frequency_outputs=True,
+            ))
+
+        if len(image_paths) > 1:
+            save_root.mkdir(parents=True, exist_ok=True)
+            create_final_output_grid(
+                final_output_paths,
+                save_root / "all_final_outputs.png",
+            )
+            marked_output_paths = [
+                path.parent / "final_output_center_marked.png"
+                for path in final_output_paths
+            ]
+            create_final_output_grid(
+                marked_output_paths,
+                save_root / "all_final_outputs_center_marked.png",
+            )

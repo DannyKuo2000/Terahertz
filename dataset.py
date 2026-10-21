@@ -6,7 +6,7 @@ Classes | Training | Testing
 EMNIST:
 Split name | Classes | Training | Testing | Info
 byclass    | 62      | 697932   | 116323  | Digits + uppercase and lowercase letters
-balance    | 47      | 112800   | 18800   | Merged similar letters (e.g., 'C' and 'c', a recommended balanced subset)
+balanced   | 47      | 112800   | 18800   | Merged similar letters (e.g., 'C' and 'c', a recommended balanced subset)
 letters    | 26      | 88800    | 14800   | Uppercase letters only (labeled A~Z)
 """
 
@@ -24,15 +24,29 @@ class CustomImageDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
         self.transform = transform
-        self.image_files = sorted(
-            [f for f in os.listdir(root_dir) if f.endswith((".png", ".jpg"))]
-        )
+        supported_extensions = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+
+        if os.path.isfile(root_dir):
+            if not root_dir.lower().endswith(supported_extensions):
+                raise ValueError(f"Unsupported custom test image: {root_dir}")
+            self.image_files = [root_dir]
+        elif os.path.isdir(root_dir):
+            self.image_files = sorted(
+                os.path.join(root_dir, filename)
+                for filename in os.listdir(root_dir)
+                if filename.lower().endswith(supported_extensions)
+            )
+        else:
+            raise FileNotFoundError(f"Custom dataset path does not exist: {root_dir}")
+
+        if not self.image_files:
+            raise ValueError(f"No supported image files found in: {root_dir}")
 
     def __len__(self):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        img_path = os.path.join(self.root_dir, self.image_files[idx])
+        img_path = self.image_files[idx]
         img = Image.open(img_path).convert("L")
         if self.transform:
             img = self.transform(img)
@@ -70,7 +84,17 @@ def get_dataloaders(dataset_config, per_gpu_batch, num_workers, distributed):
 
     elif name == "Custom":
         full = CustomImageDataset(dataset_config["root"], transform)
-        test = full
+        test_root = dataset_config.get("test_root")
+        if test_root:
+            test = CustomImageDataset(test_root, transform)
+        else:
+            # Backward compatibility for existing configs.  Prefer setting
+            # ``test_root`` so that test samples are not also used in training.
+            test = full
+            print(
+                "[Dataset] Custom test_root is not set; using root as the test "
+                "set (legacy behavior; test data overlaps training/validation source)."
+            )
 
     elif name == "MNIST+EMNIST":
         seed = dataset_config.get("seed", 42)

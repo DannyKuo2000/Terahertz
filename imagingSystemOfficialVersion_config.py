@@ -7,15 +7,27 @@
 # image length = 0.03 (m) => 0.03/0.0001875 = 160 pixels
 
 
-ENCODER_CONFIG = {
+from math import pi
+
+
+ENCODER_CONFIG = {  # input could be image or file
+    "image_extensions": (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"),
+
     # "image_path": "data/GroundTruth-800-v1/004.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s01_00_cross.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s10_10_upper_B.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s11_20_lower_b.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s20_30_upper_D.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s21_40_upper_D.png",
-    "image_path": "other_data/GeneratedObjects/center_square.png",
-
+    # "image_path": "other_data/GeneratedObjects/center_square.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s13_22_lower_b.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s07_13_lower_a.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s09_11_upper_B.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s17_33_lower_C.png",
+    # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s19_31_lower_C.png",
+    # "image_path": "data/GroundTruthNew/GeoPlate",
+    "image_path": "data/GroundTruthNew/Plate1_sample",
+    
 
     # "save_path": "results/OpticalExp260908/GroundTruth-800-v1/004",
     # "save_path": "results/OpticalExp260908/Plate4_s01_00_cross",
@@ -24,7 +36,14 @@ ENCODER_CONFIG = {
     # "save_path": "results/OpticalExp260908/Plate4_s20_30_upper_D",
     # "save_path": "results/OpticalExp260908/Plate4_s21_40_upper_D",
     # "save_path": "results/OpticalExp260915/Plate4_s01_00_cross",
-    "save_path": "results/GeneratedObjects/center_square",
+    # "save_path": "results/GeneratedObjects/center_square",
+    # "save_path": "results/OpticalExp260921/Plate4_s07_13_lower_a",
+    # "save_path": "results/OpticalExp260921/Plate4_s09_11_upper_B",
+    # "save_path": "results/OpticalExp260921/Plate4_s17_33_lower_C",
+    # "save_path": "results/OpticalExp260921/Plate4_s19_31_lower_C",
+    # "save_path": "results/ImagingGroundTruth/GeoPlate",
+    "save_path": "results/ImagingGroundTruth/Plate1_sample",
+    # "save_path": "results/OpticalExp261001/Plate4_sample/Plate4_s01_00_cross",
 
     #====== Transformation for input image ======
     "transform_configs": [
@@ -32,19 +51,24 @@ ENCODER_CONFIG = {
             "name": "InputTransform",
             "crop_size": None,  # crop size, e.g., (H, W)
             "resize_size": (160, 160),  # resize size, e.g., (H, W)
+
+            "binary": True,  # crop/resize 後是否二值化；ToTensor() 後使用 0~1
+            "binary_threshold": 0.5,  # 約等同原始 0~255 灰階的 128
+            
             "displace_size": (0, 0),#(int(30*3483/400), int(100*3483/400)),  # displace size, e.g., (H, W), down & right are positive
             "pad_size": (384, 384),  # pad size, e.g., (H, W)
+            
         },
     ],
 
 
     #====== SourceLayer ======: length: 0.03m, size: 160, dx: 0.0001875
     "use_input": False,  # use input source
-    "input": "other_data/NVLab260907_fixed/MultiSnap_2026-09-07_20-04-46_0482_average.png",  # input source path
+    "input": "other_data/NVLab260909/NVLab260909_4_fixed/reconstructed.png",  # input source path
     "mode_source": "white",  # default source mode, e.g., "white" or "gaussian"
     "created_size": (160, 160),  # size of gaussian beam
     "source_is_intensity": True,
-
+    
     # only for gaussian source
     "sigma": 0.01,  # sigma of gaussian
     "amplitude": 1.0,  # amplitude of gaussian, range: [0, 1]
@@ -53,10 +77,17 @@ ENCODER_CONFIG = {
     "aspect_ratio": 1.0,  # oval ratio
 
     "crop_size_source": None,  # 0.03024 / 250um = 120.96, 0.04032 / 250um = 161.28
-    "resize_size_source": (160, 160),
+    "resize_size_source": (121, 161),
     "displace_size_source": None,
     "pad_size_source": (384, 384),
 
+    # Built-in source phase; strength is in radians.
+    # Modes: none, constant, linear_x, linear_y, linear_angle, quadratic, random
+    "source_phase_mode": "none",
+    "source_phase_strength": 7 * pi,
+    "source_phase_angle_deg": 95.0,  # direction used by linear_angle
+    "source_phase_center": (0.0, 0.0),  # normalized (x, y), normally in [-1, 1]
+    "source_phase_seed": 1,
 
     #====== DiffractiveLayer ======
     # 4F layout: object -> f1 -> lens1 -> f1 + f2 -> lens2 -> f2 -> image plane
@@ -64,7 +95,19 @@ ENCODER_CONFIG = {
         {
             "name": "ObjectToLens1",
             # "z": 0.296,
-            "z": 0.102,                  # distance (m)
+            "z": 0.306,                  # distance (m)
+            "dx": 0.00025,           # spatial resolution (m)
+            "num_size": 384,           # size of each layer
+            "frequency": 0.2004e12,     
+            "refractive_index": 1,      # refractive index
+            "pad_factor": 1,
+            "window": "hann",
+            "mask_evanescent": False,
+            "reverse_z": False,
+        },
+        {
+            "name": "Lens1ToLens2",
+            "z": 0.408,                  # distance (m)
             "dx": 0.00025,           # spatial resolution (m)
             "num_size": 384,           # size of each layer
             "frequency": 0.2004e12,     
@@ -75,8 +118,8 @@ ENCODER_CONFIG = {
             "reverse_z": False,
         },
         # {
-        #     "name": "Lens1ToLens2",
-        #     "z": 0.408,                  # distance (m)
+        #     "name": "Lens1ToLens2_1",
+        #     "z": 0.306,                  # distance (m)
         #     "dx": 0.00025,           # spatial resolution (m)
         #     "num_size": 384,           # size of each layer
         #     "frequency": 0.2004e12,     
@@ -86,30 +129,18 @@ ENCODER_CONFIG = {
         #     "mask_evanescent": False,
         #     "reverse_z": False,
         # },
-        {
-            "name": "Lens1ToLens2_1",
-            "z": 0.102,                  # distance (m)
-            "dx": 0.00025,           # spatial resolution (m)
-            "num_size": 384,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
-        {
-            "name": "Lens1ToLens2_2",
-            "z": 0.102,                  # distance (m)
-            "dx": 0.00025,           # spatial resolution (m)
-            "num_size": 384,           # size of each layer
-            "frequency": 0.2004e12,     
-            "refractive_index": 1,      # refractive index
-            "pad_factor": 1,
-            "window": "hann",
-            "mask_evanescent": False,
-            "reverse_z": False,
-        },
+        # {
+        #     "name": "Lens1ToLens2_2",
+        #     "z": 0.102,                  # distance (m)
+        #     "dx": 0.00025,           # spatial resolution (m)
+        #     "num_size": 384,           # size of each layer
+        #     "frequency": 0.2004e12,     
+        #     "refractive_index": 1,      # refractive index
+        #     "pad_factor": 1,
+        #     "window": "hann",
+        #     "mask_evanescent": False,
+        #     "reverse_z": False,
+        # },
         {
             "name": "Lens2ToSensor",
             "z": 0.102,                  # distance (m)
@@ -191,7 +222,7 @@ ENCODER_CONFIG = {
     "lens_configs": [
         {   # simulation range: dx * num_size
             "name": "Lens1",
-            "focal_length": 0.102,
+            "focal_length": 0.306,
             "dx": 0.00025,
             "num_size": 384,
             "pupil_type": "circular",
@@ -280,10 +311,11 @@ ENCODER_CONFIG = {
 
 
     #====== Final Process ====== simulate as Brightness and Contrast
-    "gain": 10,#0.4,#0.1, 
+    "gain": 0.1,#0.4,#0.1, 
     "bias": 0/255,#80/255,#80/255, # should between 0 ~ 1, e.g. 0.001, 1/255
     "noise_level": 0,
 }
+
 
 # --------------------------------------------------
 # Optical Chain Configuration
@@ -305,20 +337,20 @@ OPTICAL_CHAIN = [
     # {"type": "diffractive", "name": "Lens4ToObject", "index": 5},
     # {"type": "sensor", "name": "SensorLayer"},
 
-    # {"type": "source", "name": "SourceLayer"},
-    # {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
-    # {"type": "lens", "name": "Lens1", "index": 0},
-    # {"type": "diffractive", "name": "Lens1ToLens2", "index": 1},
-    # {"type": "lens", "name": "Lens2", "index": 1},
-    # {"type": "diffractive", "name": "Lens2ToSensor", "index": 2},
-    # {"type": "sensor", "name": "SensorLayer"},
-
     {"type": "source", "name": "SourceLayer"},
     {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
     {"type": "lens", "name": "Lens1", "index": 0},
-    {"type": "diffractive", "name": "Lens1ToLens2_1", "index": 1},
-    {"type": "diffractive", "name": "Lens1ToLens2_2", "index": 2},
+    {"type": "diffractive", "name": "Lens1ToLens2", "index": 1},
     {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToSensor", "index": 3},
-    {"type": "diffractive", "name": "SensorToLens3", "index": 3},
+    {"type": "diffractive", "name": "Lens2ToSensor", "index": 2},
+    {"type": "sensor", "name": "SensorLayer"},
+
+    # {"type": "source", "name": "SourceLayer"},
+    # {"type": "diffractive", "name": "ObjectToLens1", "index": 0},
+    # {"type": "lens", "name": "Lens1", "index": 0},
+    # {"type": "diffractive", "name": "Lens1ToLens2_1", "index": 1},
+    # {"type": "diffractive", "name": "Lens1ToLens2_2", "index": 2},
+    # {"type": "lens", "name": "Lens2", "index": 1},
+    # {"type": "diffractive", "name": "Lens2ToSensor", "index": 3},
+    # {"type": "diffractive", "name": "SensorToLens3", "index": 3},
 ]

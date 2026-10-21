@@ -29,6 +29,8 @@ class SourceLayer(nn.Module):
                 source_is_intensity=True,
                 sigma=0.3, amplitude=1.0, center=(0.0, 0.0),
                 rotation=0.0, aspect_ratio=1.0,
+                phase_mode="none", phase_strength=0.0, phase_angle_deg=0.0,
+                phase_center=(0.0, 0.0), phase_seed=0,
                 crop_size_source=None, resize_size_source=None, displace_size_source=None, pad_size_source=None):
         
         super().__init__()
@@ -37,6 +39,11 @@ class SourceLayer(nn.Module):
         self.mode = mode  # default source modes
         self.created_size = created_size  # size of default sources
         self.source_is_intensity = source_is_intensity  # switch to E for angular spectrum
+        self.phase_mode = str(phase_mode).lower()
+        self.phase_strength = float(phase_strength)
+        self.phase_angle_deg = float(phase_angle_deg)
+        self.phase_center = tuple(float(v) for v in phase_center)
+        self.phase_seed = int(phase_seed)
 
         # Gaussian beam parameter
         self.sigma = sigma
@@ -53,6 +60,51 @@ class SourceLayer(nn.Module):
             pad_size=pad_size_source,
         )
 
+    def _apply_phase(self, amplitude):
+        """Apply a built-in phase mask to a real/complex source amplitude."""
+        mode = self.phase_mode
+        if mode == "none":
+            return amplitude
+        real_dtype = amplitude.real.dtype if torch.is_complex(amplitude) else amplitude.dtype
+        _, _, height, width = amplitude.shape
+        yy, xx = torch.meshgrid(
+            torch.linspace(-1.0, 1.0, height, device=amplitude.device, dtype=real_dtype),
+            torch.linspace(-1.0, 1.0, width, device=amplitude.device, dtype=real_dtype),
+            indexing="ij",
+        )
+        # Phase coordinates are normalized to [-1, 1]. The configured center
+        # is subtracted before calculating spatially varying phase.
+        xx = xx - self.phase_center[0]
+        yy = yy - self.phase_center[1]
+        if mode == "constant":
+            phase = torch.full_like(xx, self.phase_strength)
+            print("hi")
+        elif mode == "linear_x":
+            phase = self.phase_strength * xx
+        elif mode == "linear_y":
+            phase = self.phase_strength * yy
+        elif mode == "linear_angle":
+            angle = math.radians(self.phase_angle_deg)
+            phase = self.phase_strength * (
+                math.cos(angle) * xx + math.sin(angle) * yy
+            )
+        elif mode == "quadratic":
+            phase = self.phase_strength * (xx ** 2 + yy ** 2)
+        elif mode == "random":
+            generator = torch.Generator(device=amplitude.device)
+            generator.manual_seed(self.phase_seed)
+            phase = self.phase_strength * torch.rand(
+                (height, width), device=amplitude.device, dtype=real_dtype,
+                generator=generator,
+            )
+        else:
+            raise ValueError(
+                "Unknown phase_mode. Use none, constant, linear_x, linear_y, "
+                "quadratic, or random."
+            )
+        phase = phase.unsqueeze(0).unsqueeze(0)
+        return amplitude * torch.exp(1j * phase)
+
     def forward(self, x):
         device = x.device  
         if self.use_input:
@@ -66,7 +118,7 @@ class SourceLayer(nn.Module):
                 source_background = torch.sqrt(torch.clamp(source_background, min=0.0))
 
             input_resized = self.resize_pad(source_background.to(device=device, dtype=x.dtype))
-            return x * input_resized
+            return x * self._apply_phase(input_resized)
 
         else:
             H, W = self.created_size
@@ -101,13 +153,14 @@ class SourceLayer(nn.Module):
                 raise ValueError(f"Unknown source mode: {self.mode}")
 
             src_resized = self.resize_pad(src)
-            return x * src_resized.to(device=device, dtype=x.dtype)
+            return x * self._apply_phase(src_resized.to(device=device, dtype=x.dtype))
 
 class CropResizeDisplacePad(nn.Module):
     """
     Simulation of crop, resize, displace, pad
     """
-    def __init__(self, crop_size=None, resize_size=None, displace=None, pad_size=None, mode='bilinear'):
+    def __init__(self, crop_size=None, resize_size=None, displace=None, pad_size=None,
+                    mode='bilinear', binary=False, binary_threshold=0.5):
         """
         resize_size: tuple (H_resize, W_resize) or None
         new_size: tuple (H_new, W_new) or None
@@ -119,6 +172,8 @@ class CropResizeDisplacePad(nn.Module):
         self.displace = displace if displace is not None else (0, 0)
         self.pad_size = pad_size
         self.mode = mode
+        self.binary = binary
+        self.binary_threshold = binary_threshold
 
     def forward(self, x):
         """
@@ -154,6 +209,13 @@ class CropResizeDisplacePad(nn.Module):
             else:
                 x = F.interpolate(x, size=self.resize_size, mode=self.mode, align_corners=False)
             #print(x.shape)
+
+        # Binary process after crop and resize. Input is normalized to 0~1.
+        if self.binary:
+            if torch.is_complex(x):
+                raise ValueError("Binary processing requires a real-valued image tensor")
+            x = (x >= self.binary_threshold).to(dtype=x.dtype)
+
         # -------------------------
         # Displacement / Padding or Cropping ??pad_size
         # -------------------------
@@ -493,13 +555,13 @@ class LensLayer(nn.Module):
         x = (np.arange(self.N) - self.N/2) * self.dx
         X, Y = np.meshgrid(x, x)
 
-        if phase_model == "exact":
+        if phase_model == "exact":  #! include higher order terms in the lens phase
             # Spherical lens phase
             if mode == "backward":
                 H_lens = np.exp(1j * k * (np.sqrt(X**2 + Y**2 + self.f**2) - self.f))
             else:
                 H_lens = np.exp(-1j * k * (np.sqrt(X**2 + Y**2 + self.f**2) - self.f))
-        else:
+        else:  #! only first order term in the lens phase, paraxial approximation
             # Paraxial lens phase
             if mode == "backward":
                 H_lens = np.exp(1j * k * (X**2 + Y**2) / (2*self.f))
@@ -1093,6 +1155,11 @@ class ONN(nn.Module):
         mode_source = config["mode_source"]
         created_size = config["created_size"]
         source_is_intensity = config["source_is_intensity"]
+        phase_mode = config.get("source_phase_mode", "none")
+        phase_strength = config.get("source_phase_strength", 0.0)
+        phase_angle_deg = config.get("source_phase_angle_deg", 0.0)
+        phase_center = config.get("source_phase_center", (0.0, 0.0))
+        phase_seed = config.get("source_phase_seed", 0)
 
         sigma = config["sigma"]
         amplitude = config["amplitude"]
@@ -1147,6 +1214,11 @@ class ONN(nn.Module):
                 "mode": mode_source,
                 "created_size": created_size,
                 "source_is_intensity": source_is_intensity,
+                "phase_mode": phase_mode,
+                "phase_strength": phase_strength,
+                "phase_angle_deg": phase_angle_deg,
+                "phase_center": phase_center,
+                "phase_seed": phase_seed,
                 "sigma": sigma,
                 "amplitude": amplitude,
                 "center": center,
@@ -1309,6 +1381,8 @@ class ONN(nn.Module):
                 resize_size=t0["resize_size"],
                 displace=t0["displace_size"],
                 pad_size=t0["pad_size"],
+                binary=t0.get("binary", False),
+                binary_threshold=t0.get("binary_threshold", 0.5),
             )
         )
         self.layer_names.append(f"{total_index}_{t0['name']}")
@@ -1324,6 +1398,11 @@ class ONN(nn.Module):
                 mode=mode_source,
                 created_size=created_size,
                 source_is_intensity=source_is_intensity,
+                phase_mode=phase_mode,
+                phase_strength=phase_strength,
+                phase_angle_deg=phase_angle_deg,
+                phase_center=phase_center,
+                phase_seed=phase_seed,
                 sigma=sigma,
                 amplitude=amplitude,
                 center=center,
