@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from model.Restormer260803 import Restormer
+from model.RestormerOfficial import Restormer
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
 from dataset import get_dataloaders

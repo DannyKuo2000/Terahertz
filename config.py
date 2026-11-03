@@ -3,8 +3,8 @@
 # --------------------------------------------------
 DATASET_CONFIG = {
     # "dataset_name": "MNIST+EMNIST",   #! Options: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
-    # "dataset_name": "Custom",  #! Options: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
-    "dataset_name": "EMNIST",
+    "dataset_name": "Custom",  #! Options: "MNIST" | "FashionMNIST" | "EMNIST" | "Custom" | "MNIST+EMNIST"
+    # "dataset_name": "EMNIST",
 
     "emnist_split": "balanced",  #! dataset type of EMNIST: byclass, balanced, letter (only available in EMNIST or MNIST+EMNIST)
     "mnist_size": int(60000),  # size of mnist for training (only available in MNIST+EMNIST)
@@ -83,42 +83,6 @@ ENCODER_CONFIG = {
     #====== DiffractiveLayer ======
     # Ordered propagation segments between optical elements
     "diffractive_configs": [
-        # {
-        #     "name": "ObjectToLens1",
-        #     "z": 0.306,                  # distance (m)
-        #     "dx": 0.00025,           # spatial resolution (m)
-        #     "num_size": 384,           # size of each layer
-        #     "frequency": 0.2004e12,     
-        #     "refractive_index": 1,      # refractive index
-        #     "pad_factor": 1,
-        #     "window": "hann",
-        #     "mask_evanescent": False,
-        #     "reverse_z": False,
-        # },
-        # {
-        #     "name": "Lens1ToLens2",
-        #     "z": 0.408,
-        #     "dx": 0.00025,
-        #     "num_size": 384,
-        #     "frequency": 0.2004e12,
-        #     "refractive_index": 1,
-        #     "pad_factor": 1,
-        #     "window": "hann",
-        #     "mask_evanescent": False,
-        #     "reverse_z": False,
-        # },
-        # {
-        #     "name": "Lens2ToCamera",
-        #     "z": 0.102,
-        #     "dx": 0.00025,
-        #     "num_size": 384,
-        #     "frequency": 0.2004e12,
-        #     "refractive_index": 1,
-        #     "pad_factor": 1,
-        #     "window": "hann",
-        #     "mask_evanescent": False,
-        #     "reverse_z": False,
-        # },
         {
             "name": "ObjectToMaterial1",
             "z": 0.06,                  # distance (m)
@@ -144,7 +108,19 @@ ENCODER_CONFIG = {
             "reverse_z": False,
         },
         {
-            "name": "Material2ToLens1",
+            "name": "Material2ToMaterial3",
+            "z": 0.06,                  # distance (m)
+            "dx": 0.00025,           # spatial resolution (m)
+            "num_size": 384,           # size of each layer
+            "frequency": 0.2004e12,     
+            "refractive_index": 1,      # refractive index
+            "pad_factor": 1,
+            "window": "hann",
+            "mask_evanescent": False,
+            "reverse_z": False,
+        },
+        {
+            "name": "Material3ToLens1",
             "z": 0.306,                  # distance (m)
             "dx": 0.00025,           # spatial resolution (m)
             "num_size": 384,           # size of each layer
@@ -198,13 +174,13 @@ ENCODER_CONFIG = {
             "return_phases": False,
             "attach_after_diffractive_index": 1,  # Insert after diffractive layer 1 (material1 -> material2)
         },
-        # {
-        #     "name": "Material3",
-        #     "num_size": 128*3,
-        #     "block_size": (3, 3),
-        #     "return_phases": False,
-        #     "attach_after_diffractive_index": 2,  # Insert after diffractive layer 2 (material2 -> material3)
-        # },
+        {
+            "name": "Material3",
+            "num_size": 128*3,
+            "block_size": (3, 3),
+            "return_phases": False,
+            "attach_after_diffractive_index": 2,  # Insert after diffractive layer 2 (material2 -> material3)
+        },
     ],
 
 
@@ -298,11 +274,13 @@ OPTICAL_CHAIN = [
     {"type": "material", "name": "Material1", "index": 0},
     {"type": "diffractive", "name": "Material1ToMaterial2", "index": 1},
     {"type": "material", "name": "Material2", "index": 1},
-    {"type": "diffractive", "name": "Material2ToLens1", "index": 2},
+    {"type": "diffractive", "name": "Material2ToMaterial3", "index": 2},
+    {"type": "material", "name": "Material3", "index": 2},
+    {"type": "diffractive", "name": "Material3ToLens1", "index": 3},
     {"type": "lens", "name": "Lens1", "index": 0},
-    {"type": "diffractive", "name": "Lens1ToLens2", "index": 3},
+    {"type": "diffractive", "name": "Lens1ToLens2", "index": 4},
     {"type": "lens", "name": "Lens2", "index": 1},
-    {"type": "diffractive", "name": "Lens2ToCamera", "index": 4},
+    {"type": "diffractive", "name": "Lens2ToCamera", "index": 5},
     {"type": "sensor", "name": "SensorLayer"},
 ]
 
@@ -310,6 +288,7 @@ OPTICAL_CHAIN = [
 # --------------------------------------------------
 # Restormer Configuration
 # --------------------------------------------------
+#! Important: need to change the right Restormer model in train.py and test.py
 RESTORMER_CONFIG = {
     # alignment and downsampling padding
     "padding_factor": 8,
@@ -355,26 +334,26 @@ AUTOENCODER_CONFIG = {
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_v7",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Restormer_ONN8LBlock_v7",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_v13",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Restormer_ONN8LBlock_v13",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": False,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_v7/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_v13/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
     "last_checkpoint_name": "last_checkpoint.pth",  # Filename for the latest full checkpoint
     
     # ====== TensorBoard setting ======  #! close or reduce to improve training speed
-    "tb_log_lr": False,  # Log learning rate to TensorBoard  
-    "tb_log_epoch_time": False,  # Log epoch duration to TensorBoard  
-    "tb_log_gpu_memory": False,  # Log GPU memory usage to TensorBoard  
-    "tb_log_recon_every_n_epochs": 5,  # Log reconstruction images every N epochs
+    "tb_log_lr": True,  # Log learning rate to TensorBoard  
+    "tb_log_epoch_time": True,  # Log epoch duration to TensorBoard  
+    "tb_log_gpu_memory": True,  # Log GPU memory usage to TensorBoard  
+    "tb_log_recon_every_n_epochs": 10,  # Log reconstruction images every N epochs
     "tb_log_recon_num_images": 8,  # Number of images to log for reconstruction visualization
 
 
     # ====== Resume training ======
     "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_v7/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_v13/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
     # ====== Experiments hyperparameters ======
     # === Debug ===
@@ -392,7 +371,8 @@ TRAINING_CONFIG = {
     # === Training hyperparameters ===
     "global_batch_size": 40,  #!
     "epochs": 500,
-    "max_iterations": 300_000,
+    "max_iterations": 1000_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    # "max_iterations": 300_000,
 
     # loss
     "loss": "L1",
@@ -400,7 +380,7 @@ TRAINING_CONFIG = {
     # Optimizer
     "optimizer": "AdamW",
     "learning_rate": 3e-4,
-    "optimizer_params": {  #! params for AdamW
+    "optimizer_params": {  # params for AdamW
         "betas": (0.9, 0.999),
         "weight_decay": 1e-4,
     },
@@ -409,7 +389,8 @@ TRAINING_CONFIG = {
     "use_scheduler": True,
     "scheduler_type": "CosineAnnealingLR",
     "scheduler_params": {
-        "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
+        # "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
+        "T_max": 1000_000,
         "eta_min": 1e-6,
     },
 
@@ -418,8 +399,13 @@ TRAINING_CONFIG = {
     "plc_loss_weight": 1e-4,  # loss weight of phase local contrast loss
     "plc_sigma": 100,  # std
     "use_weight": True,
-    "loss_mode": "margin"  # "margin": Margin-based Gradient Loss, "mean"
+    "loss_mode": "margin",  # "margin": Margin-based Gradient Loss, "mean"
     #"margin":  # for margin mode only
+
+    #! Small input translation robustness training
+    "use_shift_consistency": False,  #! Switch
+    "shift_consistency_max_pixels": 5,
+    "shift_consistency_target": "shifted_ground_truth",  #! don't change
 }
 
 # --------------------------------------------------
@@ -429,28 +415,36 @@ TESTING_CONFIG = {
     # === Parallel ===
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 512,#128,
+    "batch_size": 128,
 
     # # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v7',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v13',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
+    # Model input shift test: (vertical, horizontal), in pixels.
+    # Set both values to 0 to keep the normal test behavior.
+    "input_shift": (0, 0),  #! translate the ONN input image
+
     # save config
-    "results_save_dir": './results/Restormer_ONN8LBlock_v7',  #! check before testing.
+    "results_save_dir": './results/Restormer_ONN8LBlock_v13',  #! check before testing.
+    # "results_save_dir": './results/Restormer_ONN8LBlock_v13_analysis',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
-    "save_mse_ranked_panels": True,
-    "save_mse_best_panel": False,
+    "save_frequency_domain_panels": True,  # save frequency domain comparison
+    "fixed_comparison_seed": 42,
+    "fixed_comparison_count": 10,
+    "save_mse_ranked_panels": True,  # generate MSE-ranked panels for the best, middle, and worst reconstructions
+    "save_mse_best_panel": True,  
     "save_mse_middle_panel": True,
     "save_mse_bottom_panel": True,
-    "mse_panel_size": 30,
-    "mse_best_quantile_range": [0.0, 0.0],
-    "mse_middle_quantile_range": [0.45, 0.45],
+    "mse_panel_size": 30,  # maximum number of images to include in each MSE-ranked panel
+    "mse_best_quantile_range": [0.0, 0.1],
+    "mse_middle_quantile_range": [0.45, 0.55],
     "mse_bottom_quantile_range": [0.9, 1.0],
     "save_mse_ranked_csv": True,
     "save_psnr_distribution_table": True,
     "save_psnr_distribution_histogram": True,
-    "psnr_bin_edges": [15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
+    "psnr_bin_edges": [10, 12.5, 15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
     "psnr_quantile_points": [0.1, 0.25, 0.5, 0.75, 0.9],
 
     # ONN debug
@@ -472,11 +466,11 @@ LATENT_ANALYSIS_CONFIG = {
     "batch_size": 128,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v7',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v13',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_v7_analysis1',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_v13_analysis1',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes

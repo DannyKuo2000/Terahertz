@@ -14,7 +14,8 @@ from torch.nn import functional as F
 import math
 from model.opticalSimulation import ONN, MaterialLayer # import your model here
 from model.autoencoder import Autoencoder
-from model.restormer250724 import Restormer
+# from model.restormer250724 import Restormer  #! important
+from model.RestormerOfficial import Restormer  #! important
 from config import AUTOENCODER_CONFIG, ENCODER_CONFIG, RESTORMER_CONFIG
 
 
@@ -127,10 +128,13 @@ def weight2npy(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights-dir', type=str, default='./checkpoints_weights/baseline_restormer_ONN/weights')
-    parser.add_argument('--weights-name', type=str, default='epoch60_valLoss0.0021_20251030_224229.pth')
-    parser.add_argument('--output-dir', type=str, default='./ONN_manufacture', help='directory for saving npy files')
-    parser.add_argument('--output-name', type=str, default='test', help='output file name')
+    parser.add_argument('--weights-dir', type=str, default='../checkpoints_weights/Restormer_ONN8LBlock_v7')
+    parser.add_argument('--weights-name', type=str, default='best_model.pth')
+    parser.add_argument('--output-dir', type=str, default='./npy_output', help='directory for saving npy files')
+    parser.add_argument('--output-name', type=str, default='test_261030_1', help='output file name')
     args_ = parser.parse_args()
 
     weight2npy(args_)
+
+#  Command example:
+#  python Weight2Print_pretest.py --weights-dir ../checkpoints_weights/Restormer_ONN8LBlock_v7 --weights-name best_model.pth --output-dir ./npy_output --output-name test_261030_1

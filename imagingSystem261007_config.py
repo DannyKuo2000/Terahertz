@@ -25,8 +25,9 @@ ENCODER_CONFIG = {  # input could be image or file
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s09_11_upper_B.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s17_33_lower_C.png",
     # "image_path": "data/GroundTruthNew/Plate4_sample/Plate4_s19_31_lower_C.png",
-    "image_path": "data/GroundTruthNew/GeoPlate",
+    # "image_path": "data/GroundTruthNew/GeoPlate",
     # "image_path": "data/GroundTruthNew/Plate4_sample",
+    "image_path": "data/GroundTruthNew2/Plate_60",
     
 
     # "save_path": "results/OpticalExp260908/GroundTruth-800-v1/004",
@@ -41,7 +42,8 @@ ENCODER_CONFIG = {  # input could be image or file
     # "save_path": "results/OpticalExp260921/Plate4_s09_11_upper_B",
     # "save_path": "results/OpticalExp260921/Plate4_s17_33_lower_C",
     # "save_path": "results/OpticalExp260921/Plate4_s19_31_lower_C",
-    "save_path": "results/ImagingGroundTruth/GeoPlate",
+    # "save_path": "results/ImagingGroundTruth/GeoPlate",
+    "save_path": "results/GroundTruthNew2/Plate_60",
     # "save_path": "results/ImagingGroundTruth/Plate4_sample",
     # "save_path": "results/OpticalExp261001/Plate4_sample/Plate4_s01_00_cross",
 

@@ -706,12 +706,9 @@ def process_image(path, output_dir, model, device, save_frequency_outputs=False)
 
     if source_radial is not None and sensor_radial is not None and lens_radial is not None:
         figure, axis = plt.subplots(figsize=(8, 5))
-        axis.plot(np.arange(len(source_radial)), source_radial,
-                  label="2_SourceLayer_abs", linewidth=1.2)
-        axis.plot(np.arange(len(sensor_radial)), sensor_radial,
-                  label="8_SensorLayer_abs", linewidth=1.2)
-        axis.plot(np.arange(len(lens_radial)), lens_radial,
-                  label="7_Lens2ToSensor_abs", linewidth=1.2)
+        axis.plot(np.arange(len(source_radial)), source_radial, label="2_SourceLayer_abs", linewidth=1.2)
+        axis.plot(np.arange(len(sensor_radial)), sensor_radial, label="8_SensorLayer_abs", linewidth=1.2)
+        axis.plot(np.arange(len(lens_radial)), lens_radial, label="7_Lens2ToSensor_abs", linewidth=1.2)
         axis.set_title("SourceLayer vs Lens2ToSensor vs SensorLayer radial spectrum")
         axis.set_xlabel("Frequency radius (FFT pixels)")
         axis.set_ylabel("Mean |F|")

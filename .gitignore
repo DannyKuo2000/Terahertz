@@ -29,5 +29,8 @@ ExperimentsRecord.xlsx
 # STL files
 *.stl
 
+# NPY files
+*.npy
+
 # PNG 
 *.png

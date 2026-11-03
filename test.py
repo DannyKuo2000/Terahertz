@@ -22,7 +22,8 @@ from dataset import get_dataloaders
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import MaterialLayer, ONN
 # from model.restormer250724 import Restormer
-from model.Restormer260803 import Restormer
+from model.RestormerOfficial import Restormer  #! important
+# from model.Restormer261021 import Restormer  #! important
 
 
 def parse_args():
@@ -187,6 +188,16 @@ def load_model(model, model_path):
     model.eval()
     if is_main():
         print(f"Model loaded from {model_path}")
+        #! [HF-RECOVERY] Display injection strengths loaded from this checkpoint
+        model_core = model.module if hasattr(model, "module") else model
+        decoder = getattr(model_core, "decoder", None)
+        gammas = getattr(decoder, "refinement_recovery_gammas", None)
+        if gammas is not None:
+            gamma_summary = " ".join(
+                f"gamma_{idx + 1}={gamma.detach().item():.6f}"
+                for idx, gamma in enumerate(gammas)
+            )
+            print(f"[HF-RECOVERY] {gamma_summary}")
         if missing:
             print(f"[load_model] Missing keys ignored: {missing}")
         if unexpected:
@@ -198,6 +209,32 @@ def compute_psnr(mse, max_pixel=1.0):
     if mse <= 0:
         return float("inf")
     return 20 * math.log10(max_pixel) - 10 * math.log10(mse)
+
+
+#! [HF-RECOVERY] Begin: Input shift test helper
+def shift_tensor_zero_fill(x, dy, dx):
+    shifted = torch.zeros_like(x)
+    height, width = x.shape[-2:]
+
+    src_y0 = max(0, -dy)
+    src_y1 = min(height, height - dy)
+    src_x0 = max(0, -dx)
+    src_x1 = min(width, width - dx)
+    dst_y0 = max(0, dy)
+    dst_x0 = max(0, dx)
+
+    if src_y1 > src_y0 and src_x1 > src_x0:
+        dst_y1 = dst_y0 + (src_y1 - src_y0)
+        dst_x1 = dst_x0 + (src_x1 - src_x0)
+        shifted[..., dst_y0:dst_y1, dst_x0:dst_x1] = x[..., src_y0:src_y1, src_x0:src_x1]
+
+    return shifted
+
+
+def get_configured_input_shift():
+    shift = TESTING_CONFIG.get("input_shift", (0, 0))
+    return int(shift[0]), int(shift[1])
+#! [HF-RECOVERY] End: Input shift test helper
 
 
 def ssim_pt(img1, img2, window_size=11, C1=0.01**2, C2=0.03**2):
@@ -284,6 +321,9 @@ def get_latent_map(model, imgs, config, target_size=None):
 
 def test_model(model):
     model.eval()
+    if is_main():
+        dy, dx = get_configured_input_shift()
+        print(f"[HF-RECOVERY] Model input shift: dy={dy}, dx={dx} pixels")
     local_imgs, local_recons = [], []
     local_mses = []
 
@@ -295,23 +335,26 @@ def test_model(model):
     with torch.no_grad():
         for imgs, _ in tqdm(test_loader, desc="Testing", disable=not is_main()):
             imgs = imgs.to(device)
-            outputs = model(imgs)
+            #! [HF-RECOVERY] Shift the ONN input and use the equally shifted GT
+            dy, dx = get_configured_input_shift()
+            target_imgs = shift_tensor_zero_fill(imgs, dy, dx)
+            outputs = model(target_imgs)
             recons = select_reconstruction(outputs)
 
             if torch.is_complex(recons):
                 recons = torch.abs(recons)
 
-            batch_mse_sum = F.mse_loss(recons, imgs, reduction="none").flatten(1).mean(dim=1)
+            batch_mse_sum = F.mse_loss(recons, target_imgs, reduction="none").flatten(1).mean(dim=1)
             local_mses.extend(batch_mse_sum.detach().cpu().tolist())
 
-            local_sse += F.mse_loss(recons, imgs, reduction="sum").item()
-            local_pixel_count += imgs.numel()
+            local_sse += F.mse_loss(recons, target_imgs, reduction="sum").item()
+            local_pixel_count += target_imgs.numel()
 
             for i in range(imgs.size(0)):
-                local_ssim_sum += ssim_pt(imgs[i : i + 1], recons[i : i + 1])
+                local_ssim_sum += ssim_pt(target_imgs[i : i + 1], recons[i : i + 1])
                 local_ssim_count += 1
 
-            local_imgs.append(imgs.cpu())
+            local_imgs.append(target_imgs.cpu())
             local_recons.append(recons.cpu())
 
     if distributed:
@@ -371,6 +414,80 @@ def test_model(model):
     return None, None, None, global_mse, global_psnr, global_ssim
 
 
+#! [HF-RECOVERY] Begin: Frequency-domain panel export
+def save_frequency_comparison(
+    all_imgs, all_recons, indices, model_name, config, group_name,
+    output_subdir="frequency_domain_panels",
+):
+    if not indices:
+        return
+
+    frequency_root = os.path.join(
+        config["results_save_dir"], output_subdir
+    )
+    os.makedirs(frequency_root, exist_ok=True)
+
+    for idx in indices:
+        gt = all_imgs[idx].detach().float().squeeze().cpu()
+        recon = all_recons[idx].detach().float().squeeze().cpu()
+        gt_spectrum = torch.fft.fftshift(torch.fft.fft2(gt))
+        recon_spectrum = torch.fft.fftshift(torch.fft.fft2(recon))
+        gt_magnitude = torch.log1p(torch.abs(gt_spectrum)).numpy()
+        recon_magnitude = torch.log1p(torch.abs(recon_spectrum)).numpy()
+        spectrum_difference = abs(gt_magnitude - recon_magnitude)
+
+        #! [HF-RECOVERY] Added: Radial frequency curves in cycles per pixel
+        height, width = gt.shape[-2:]
+        freq_y = torch.fft.fftshift(torch.fft.fftfreq(height))
+        freq_x = torch.fft.fftshift(torch.fft.fftfreq(width))
+        freq_grid_y, freq_grid_x = torch.meshgrid(freq_y, freq_x, indexing="ij")
+        radial_frequency = torch.sqrt(freq_grid_x ** 2 + freq_grid_y ** 2)
+        radial_bins = torch.linspace(0.0, 0.5, 65)
+        radial_centers = (radial_bins[:-1] + radial_bins[1:]) / 2
+        gt_log_tensor = torch.from_numpy(gt_magnitude)
+        recon_log_tensor = torch.from_numpy(recon_magnitude)
+        radial_gt = []
+        radial_recon = []
+        for bin_start, bin_end in zip(radial_bins[:-1], radial_bins[1:]):
+            mask = (radial_frequency >= bin_start) & (radial_frequency < bin_end)
+            radial_gt.append(gt_log_tensor[mask].mean().item() if mask.any() else float("nan"))
+            radial_recon.append(recon_log_tensor[mask].mean().item() if mask.any() else float("nan"))
+
+        mse_value = torch.mean((all_imgs[idx].float() - all_recons[idx].float()) ** 2).item()
+        psnr_value = compute_psnr(mse_value)
+        safe_psnr = "inf" if not math.isfinite(psnr_value) else f"{psnr_value:.2f}dB"
+        filename = f"PSNR_{safe_psnr}_{idx:06d}.png"
+        save_path = os.path.join(frequency_root, filename)
+
+        shared_max = max(float(gt_magnitude.max()), float(recon_magnitude.max()))
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+        axes[0, 0].imshow(gt_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
+        axes[0, 0].set_title("GT Frequency Magnitude")
+        axes[0, 1].imshow(recon_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
+        axes[0, 1].set_title("Reconstruction Frequency Magnitude")
+        axes[0, 2].imshow(spectrum_difference, cmap="viridis")
+        axes[0, 2].set_title("Absolute Difference")
+        axes[1, 0].plot(radial_centers.numpy(), radial_gt, label="GT", linewidth=2)
+        axes[1, 0].plot(radial_centers.numpy(), radial_recon, label="Reconstruction", linewidth=2)
+        axes[1, 0].set_title("Radial Frequency Spectrum")
+        axes[1, 0].set_xlabel("Spatial frequency (cycles/pixel)")
+        axes[1, 0].set_ylabel("Mean log magnitude")
+        axes[1, 0].set_xlim(0.0, 0.5)
+        axes[1, 0].grid(alpha=0.3)
+        axes[1, 0].legend()
+        axes[1, 1].axis("off")
+        axes[1, 2].axis("off")
+        for axis in axes[0, :]:
+            axis.axis("off")
+        fig.suptitle(f"Sample {idx} | PSNR={psnr_value:.4f} dB")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=180)
+        plt.close(fig)
+
+    print(f"Frequency-domain panels saved at {frequency_root} ({group_name})")
+#! [HF-RECOVERY] End: Frequency-domain panel export
+
+
 def visualize_results(model, all_imgs, all_recons, model_name, num_image, config):
     os.makedirs(config["results_save_dir"], exist_ok=True)
     num_image = min(num_image, len(all_imgs), len(all_recons))
@@ -417,6 +534,11 @@ def visualize_results(model, all_imgs, all_recons, model_name, num_image, config
     plt.savefig(save_path)
     plt.close(fig)
     print(f"Visualization saved at {save_path}")
+    #! [HF-RECOVERY] Export FFT comparisons for the first-N panel samples
+    if config.get("save_frequency_domain_panels", True):
+        save_frequency_comparison(
+            all_imgs, all_recons, list(range(num_image)), model_name, config, "first_n"
+        )
 
 
 def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config, model=None):
@@ -549,6 +671,11 @@ def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config,
         plt.savefig(save_path, dpi=180)
         plt.close(fig)
         print(f"MSE-ranked visualization saved at {save_path}")
+        #! [HF-RECOVERY] Export FFT comparisons for every MSE panel sample
+        if config.get("save_frequency_domain_panels", True):
+            save_frequency_comparison(
+                all_imgs, all_recons, indices, model_name, config, filename.rsplit(".", 1)[0]
+            )
 
     if config.get("save_mse_best_panel", False):
         save_group(best_indices, "Best cases by MSE", f"{model_name}_best_case.png")
@@ -790,6 +917,26 @@ if __name__ == "__main__":
                 num_image=TESTING_CONFIG.get("save_first_n_reconstructions", 10),
                 config=TESTING_CONFIG,
             )
+
+            #! [HF-RECOVERY] Export the same fixed comparison samples across models
+            if TESTING_CONFIG.get("save_frequency_domain_panels", True):
+                fixed_seed = int(TESTING_CONFIG.get("fixed_comparison_seed", 42))
+                fixed_count = min(
+                    int(TESTING_CONFIG.get("fixed_comparison_count", 10)),
+                    len(all_imgs),
+                )
+                fixed_rng = random.Random(fixed_seed)
+                fixed_indices = sorted(fixed_rng.sample(range(len(all_imgs)), fixed_count))
+                fixed_folder = f"fixed_comparison_seed_{fixed_seed}"
+                save_frequency_comparison(
+                    all_imgs,
+                    all_recons,
+                    fixed_indices,
+                    model_name,
+                    TESTING_CONFIG,
+                    "fixed",
+                    output_subdir=fixed_folder,
+                )
 
             if TESTING_CONFIG.get("save_mse_ranked_panels", True):
                 visualize_results_by_mse(

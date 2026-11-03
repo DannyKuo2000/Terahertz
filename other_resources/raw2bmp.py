@@ -23,8 +23,21 @@ def normalize_like_camera(img, gamma=0.6, clip_percent=0.01):
 
 
 def load_raw_image(raw_path, width, height, dtype):
+    # NVLab RAW files begin with an 8-byte little-endian header containing
+    # the image width and height as uint32 values.  Read it independently of
+    # the pixel dtype so this works for both uint16 and float32 image data.
+    header = np.fromfile(raw_path, dtype="<u4", count=2)
     data = np.fromfile(raw_path, dtype=dtype)
     expected_size = width * height
+
+    if header.size == 2 and tuple(header) == (width, height):
+        header_values = 8 // dtype.itemsize
+        if 8 % dtype.itemsize:
+            raise ValueError(
+                f"Cannot skip the 8-byte RAW header with dtype {dtype}."
+            )
+        data = data[header_values:]
+        print(f"[Info] {raw_path} has a {width}x{height} RAW header; skipping it.")
 
     if data.size > expected_size:
         print(
@@ -120,12 +133,12 @@ def parse_dtype(dtype_name):
 
 def main():
     parser = argparse.ArgumentParser(description="Convert RAW image(s) to BMP.")
-    parser.add_argument("input_path", help="Path to a .raw file or a folder of .raw files.")
+    parser.add_argument("--input_path", help="Path to a .raw file or a folder of .raw files.")
     parser.add_argument("--width", type=int, default=384, help="Image width.")
     parser.add_argument("--height", type=int, default=288, help="Image height.")
     parser.add_argument(
         "--dtype",
-        default="float32",
+        default="uint16",
         help="NumPy dtype of the RAW file, e.g. float32, uint16.",
     )
     parser.add_argument(
@@ -157,3 +170,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Implement example:
+# for raw data:
+# python raw2bmp.py --input_path ../other_data/NVLab261008/1_auto_manual/MultiSnap_2026-10-08_15-31-30_0478_0000.raw --output-name ../results/raw2bmp_test --show
+# for corrected raw data:
+# python raw2bmp.py --input_path ../other_data/NVLab261008/1_auto_manual/MultiSnap_2026-10-08_15-31-50_0461_0000_Corrected.raw --dtype float32  --output-name ../results/raw2bmp_test --show

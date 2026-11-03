@@ -22,7 +22,8 @@ from torch import amp
 from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
 # from model.restormer250724 import Restormer
-from model.Restormer260803 import Restormer
+from model.RestormerOfficial import Restormer  #! important
+# from model.Restormer261021 import Restormer  #! important
 from dataset import get_dataloaders
 from config import (
     DATASET_CONFIG,
@@ -517,6 +518,18 @@ def get_current_lr():
     return optimizer.param_groups[0]["lr"]
 
 
+def get_hf_recovery_gamma_values(model):
+    model_core = model.module if hasattr(model, "module") else model
+    decoder = getattr(model_core, "decoder", None)
+    gammas = getattr(decoder, "refinement_recovery_gammas", None)
+    if gammas is None:
+        return {}
+    return {
+        f"gamma_{idx + 1}": gamma.detach().item()
+        for idx, gamma in enumerate(gammas)
+    }
+
+
 def log_reconstruction_to_tensorboard(epoch):
     if not writer or tb_log_recon_every_n_epochs <= 0:
         return
@@ -553,12 +566,16 @@ def log_reconstruction_to_tensorboard(epoch):
         model.train()
 
 
-def log_epoch_to_tensorboard(epoch, train_loss, val_loss, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb):
+def log_epoch_to_tensorboard(epoch, train_loss, val_loss, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb, hf_recovery_gammas=None):
     if not writer:
         return
 
     writer.add_scalar("train/loss", train_loss, epoch)
     writer.add_scalar("val/loss", val_loss, epoch)
+
+    #! [HF-RECOVERY] Log each refinement injection strength to TensorBoard
+    for gamma_name, gamma_value in (hf_recovery_gammas or {}).items():
+        writer.add_scalar(f"hf_recovery/{gamma_name}", gamma_value, epoch)
 
     if tb_log_lr:
         writer.add_scalar("lr", get_current_lr(), epoch)
@@ -593,6 +610,35 @@ def get_reconstruction(outputs):
     if isinstance(outputs, (tuple, list)):
         return outputs[0]
     return outputs
+
+
+#! [HF-RECOVERY] Begin: Latent shift consistency training
+def shift_tensor_zero_fill(x, dy, dx):
+    shifted = torch.zeros_like(x)
+    height, width = x.shape[-2:]
+    src_y0 = max(0, -dy)
+    src_y1 = min(height, height - dy)
+    src_x0 = max(0, -dx)
+    src_x1 = min(width, width - dx)
+    dst_y0 = max(0, dy)
+    dst_x0 = max(0, dx)
+
+    if src_y1 > src_y0 and src_x1 > src_x0:
+        dst_y1 = dst_y0 + (src_y1 - src_y0)
+        dst_x1 = dst_x0 + (src_x1 - src_x0)
+        shifted[..., dst_y0:dst_y1, dst_x0:dst_x1] = x[..., src_y0:src_y1, src_x0:src_x1]
+    return shifted
+
+
+def shifted_latent_reconstruction(model, imgs, max_pixels):
+    model_core = model.module if hasattr(model, "module") else model
+    encoded = model_core.encoder(imgs)
+    latent = encoded[0] if isinstance(encoded, (tuple, list)) else encoded
+    dy = int(torch.randint(-max_pixels, max_pixels + 1, (), device=imgs.device).item())
+    dx = int(torch.randint(-max_pixels, max_pixels + 1, (), device=imgs.device).item())
+    shifted_latent = shift_tensor_zero_fill(latent, dy, dx)
+    return model_core.decoder(shifted_latent), (dy, dx)
+#! [HF-RECOVERY] End: Latent shift consistency training
 
 
 # =========================================================
@@ -648,9 +694,19 @@ def train_model(
             # Forward
             # =====================================================
 
-            outputs = model(imgs)
-            out = get_reconstruction(outputs)
-            loss = criterion(out, imgs)
+            if TRAINING_CONFIG.get("use_shift_consistency", False):
+                #! [HF-RECOVERY] Single-pass random latent shift training
+                max_shift = int(TRAINING_CONFIG.get("shift_consistency_max_pixels", 1))
+                shifted_outputs, (dy, dx) = shifted_latent_reconstruction(model, imgs, max_shift)
+                out = get_reconstruction(shifted_outputs)
+                shifted_target = shift_tensor_zero_fill(imgs, dy, dx)
+                valid_mask = shift_tensor_zero_fill(torch.ones_like(imgs), dy, dx)
+                shifted_error = torch.abs(out - shifted_target)
+                loss = (shifted_error * valid_mask).sum() / valid_mask.sum().clamp_min(1.0)
+            else:
+                outputs = model(imgs)
+                out = get_reconstruction(outputs)
+                loss = criterion(out, imgs)
 
             # =====================================================
             # Backward
@@ -743,6 +799,14 @@ def train_model(
         if is_main():
 
             lr = get_current_lr()
+            #! [HF-RECOVERY] Capture learned injection strengths once per epoch
+            hf_recovery_gammas = get_hf_recovery_gamma_values(model)
+            if hf_recovery_gammas:
+                gamma_summary = " ".join(
+                    f"{name}={value:.6f}"
+                    for name, value in hf_recovery_gammas.items()
+                )
+                print(f"[HF-RECOVERY] {gamma_summary}")
 
             log_epoch_to_tensorboard(
                 epoch,
@@ -751,6 +815,7 @@ def train_model(
                 epoch_time_sec,
                 gpu_mem_allocated_mb,
                 gpu_mem_reserved_mb,
+                hf_recovery_gammas,
             )
 
             append_csv_log(
