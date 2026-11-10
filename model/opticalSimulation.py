@@ -713,6 +713,8 @@ class SensorLayer(nn.Module):
 
         self.bin_size = bin_size
         self.flip = flip
+        self.last_field = None
+        self.last_full_field = None
 
     # ----------------------------
     # Gaussian PSF (intensity domain)
@@ -760,6 +762,8 @@ class SensorLayer(nn.Module):
     # ----------------------------
     def forward(self, E):
         B, C, H, W = E.shape
+        # Preserve the complete simulated field before the camera crop.
+        self.last_full_field = E.detach()
 
         # 1. crop + displacement (sub-pixel)
         crop_h, crop_w = self.crop_size
@@ -800,6 +804,18 @@ class SensorLayer(nn.Module):
             dim=-1,
         )
         grid = grid.unsqueeze(0).repeat(B, 1, 1, 1)
+
+        # Keep the sensor-aligned complex field for optional test/debug analysis.
+        # The normal forward output remains energy, so training behavior is unchanged.
+        field = F.grid_sample(
+            E.real, grid, mode="bicubic", padding_mode="zeros", align_corners=True
+        )
+        field_imag = F.grid_sample(
+            E.imag, grid, mode="bicubic", padding_mode="zeros", align_corners=True
+        )
+        self.last_field = torch.complex(field, field_imag)
+        if self.flip:
+            self.last_field = torch.flip(self.last_field, dims=[-2, -1])
 
         # 2. Intensity
         I = torch.abs(E) ** 2

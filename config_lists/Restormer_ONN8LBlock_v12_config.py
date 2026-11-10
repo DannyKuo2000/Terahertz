@@ -338,8 +338,11 @@ TRAINING_CONFIG = {
 
 
     # ====== Resume training ======
-    "resume_training": False,  # switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_v12/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
+    "resume_training": False,  #! switch, if want to start trainging from checkpoint
+    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_v12/checkpoints/epoch367_loss0.0053_20261105_002108.pth",  #! full checkpoint
+    "resume_learning_rate": 1.15e-6,  #! override checkpoint LR after loading
+    "reset_scheduler_on_resume": True,  #! True: restart scheduler from resume_learning_rate. False: continue scheduler from checkpoint LR
+    "tensorboard_purge_step": 368,  #! e.g, set 101: means delete 101 and forward tensorboard
     
     # ====== Experiments hyperparameters ======
     # === Debug ===
@@ -365,7 +368,7 @@ TRAINING_CONFIG = {
 
     # Optimizer
     "optimizer": "AdamW",
-    "learning_rate": 3e-4,
+    "learning_rate": 3e-4,  # default value is 3e-4
     "optimizer_params": {  # params for AdamW
         "betas": (0.9, 0.999),
         "weight_decay": 1e-4,
@@ -375,9 +378,9 @@ TRAINING_CONFIG = {
     "use_scheduler": True,
     "scheduler_type": "CosineAnnealingLR",
     "scheduler_params": {
-        # "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
+        # "T_max": 300_000,  # how many scheduler.step() to reach "eta_min", default value is 300_000
         "T_max": 1000_000,
-        "eta_min": 1e-6,
+        "eta_min": 1e-6,  # default value is 1e-6
     },
 
     # ====== Phase Local Contrast loss =======
@@ -402,6 +405,11 @@ TESTING_CONFIG = {
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
     "batch_size": 128,
+
+    # === Binary-output evaluation ===
+    #!  When enabled, reconstruction output is thresholded before MSE/PSNR/SSIM.
+    "binary_output_for_metrics": False,  
+    "binary_threshold": 0.5,
 
     # # load config
     "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_v12',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights

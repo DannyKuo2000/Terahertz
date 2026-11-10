@@ -379,9 +379,9 @@ TRAINING_CONFIG = {
     "last_checkpoint_name": "last_checkpoint.pth",  # Filename for the latest full checkpoint
     
     # ====== TensorBoard setting ======  #! close or reduce to improve training speed
-    "tb_log_lr": False,  # Log learning rate to TensorBoard  
-    "tb_log_epoch_time": False,  # Log epoch duration to TensorBoard  
-    "tb_log_gpu_memory": False,  # Log GPU memory usage to TensorBoard  
+    "tb_log_lr": True,  # Log learning rate to TensorBoard  
+    "tb_log_epoch_time": True,  # Log epoch duration to TensorBoard  
+    "tb_log_gpu_memory": True,  # Log GPU memory usage to TensorBoard  
     "tb_log_recon_every_n_epochs": 5,  # Log reconstruction images every N epochs
     "tb_log_recon_num_images": 8,  # Number of images to log for reconstruction visualization
 
@@ -443,28 +443,40 @@ TESTING_CONFIG = {
     # === Parallel ===
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 512,#128,
+    "batch_size": 128,
+
+    # === Binary-output evaluation ===
+    #!  When enabled, reconstruction output is thresholded before MSE/PSNR/SSIM.
+    "binary_output_for_metrics": False,  
+    "binary_threshold": 0.5,
 
     # # load config
     "weight_save_dir": './checkpoints_weights/Restormer_8LBlock_v5',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
+    # Model input shift test: (vertical, horizontal), in pixels.
+    # Set both values to 0 to keep the normal test behavior.
+    "input_shift": (0, 0),  #! translate the ONN input image
+
     # save config
     "results_save_dir": './results/Restormer_8LBlock_v5',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
-    "save_mse_ranked_panels": True,
-    "save_mse_best_panel": False,
+    "save_frequency_domain_panels": True,  # save frequency domain comparison
+    "fixed_comparison_seed": 42,
+    "fixed_comparison_count": 10,
+    "save_mse_ranked_panels": True,  # generate MSE-ranked panels for the best, middle, and worst reconstructions
+    "save_mse_best_panel": True,  
     "save_mse_middle_panel": True,
     "save_mse_bottom_panel": True,
-    "mse_panel_size": 30,
-    "mse_best_quantile_range": [0.0, 0.0],
-    "mse_middle_quantile_range": [0.45, 0.45],
+    "mse_panel_size": 30,  # maximum number of images to include in each MSE-ranked panel
+    "mse_best_quantile_range": [0.0, 0.1],
+    "mse_middle_quantile_range": [0.45, 0.55],
     "mse_bottom_quantile_range": [0.9, 1.0],
     "save_mse_ranked_csv": True,
     "save_psnr_distribution_table": True,
     "save_psnr_distribution_histogram": True,
-    "psnr_bin_edges": [15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
+    "psnr_bin_edges": [10, 12.5, 15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
     "psnr_quantile_points": [0.1, 0.25, 0.5, 0.75, 0.9],
 
     # ONN debug

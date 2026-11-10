@@ -6,6 +6,7 @@ import math
 import os
 import random
 import sys
+import numpy as np
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -20,7 +21,7 @@ from tqdm import tqdm
 
 from dataset import get_dataloaders
 from model.autoencoder import Autoencoder
-from model.opticalSimulation import MaterialLayer, ONN
+from model.opticalSimulation import MaterialLayer, SensorLayer, ONN
 # from model.restormer250724 import Restormer
 from model.RestormerOfficial import Restormer  #! important
 # from model.Restormer261021 import Restormer  #! important
@@ -211,7 +212,7 @@ def compute_psnr(mse, max_pixel=1.0):
     return 20 * math.log10(max_pixel) - 10 * math.log10(mse)
 
 
-#! [HF-RECOVERY] Begin: Input shift test helper
+#! [INPUT SHIFT] Begin: Input shift test helper
 def shift_tensor_zero_fill(x, dy, dx):
     shifted = torch.zeros_like(x)
     height, width = x.shape[-2:]
@@ -234,7 +235,7 @@ def shift_tensor_zero_fill(x, dy, dx):
 def get_configured_input_shift():
     shift = TESTING_CONFIG.get("input_shift", (0, 0))
     return int(shift[0]), int(shift[1])
-#! [HF-RECOVERY] End: Input shift test helper
+#! [INPUT SHIFT] End: Input shift test helper
 
 
 def ssim_pt(img1, img2, window_size=11, C1=0.01**2, C2=0.03**2):
@@ -323,7 +324,7 @@ def test_model(model):
     model.eval()
     if is_main():
         dy, dx = get_configured_input_shift()
-        print(f"[HF-RECOVERY] Model input shift: dy={dy}, dx={dx} pixels")
+        print(f"[INPUT SHIFT] Model input shift: dy={dy}, dx={dx} pixels")
     local_imgs, local_recons = [], []
     local_mses = []
 
@@ -343,6 +344,13 @@ def test_model(model):
 
             if torch.is_complex(recons):
                 recons = torch.abs(recons)
+
+            # Optional binary-output evaluation.  The model output is kept
+            # unchanged by default; when enabled, all metrics and saved
+            # reconstructions use a black/white image.
+            if TESTING_CONFIG.get("binary_output_for_metrics", False):
+                threshold = float(TESTING_CONFIG.get("binary_threshold", 0.5))
+                recons = (recons >= threshold).to(recons.dtype)
 
             batch_mse_sum = F.mse_loss(recons, target_imgs, reduction="none").flatten(1).mean(dim=1)
             local_mses.extend(batch_mse_sum.detach().cpu().tolist())
@@ -417,6 +425,9 @@ def test_model(model):
 #! [HF-RECOVERY] Begin: Frequency-domain panel export
 def save_frequency_comparison(
     all_imgs, all_recons, indices, model_name, config, group_name,
+    mse_values=None,
+    latent_images=None,
+    model=None,
     output_subdir="frequency_domain_panels",
 ):
     if not indices:
@@ -430,11 +441,43 @@ def save_frequency_comparison(
     for idx in indices:
         gt = all_imgs[idx].detach().float().squeeze().cpu()
         recon = all_recons[idx].detach().float().squeeze().cpu()
-        gt_spectrum = torch.fft.fftshift(torch.fft.fft2(gt))
-        recon_spectrum = torch.fft.fftshift(torch.fft.fft2(recon))
+        #! [HF-RECOVERY] Modified: Convert intensity images to field amplitude before FFT
+        gt_field = torch.sqrt(torch.clamp(gt, min=0.0))
+        recon_field = torch.sqrt(torch.clamp(recon, min=0.0))
+        gt_spectrum = torch.fft.fftshift(torch.fft.fft2(gt_field))
+        recon_spectrum = torch.fft.fftshift(torch.fft.fft2(recon_field))
         gt_magnitude = torch.log1p(torch.abs(gt_spectrum)).numpy()
         recon_magnitude = torch.log1p(torch.abs(recon_spectrum)).numpy()
         spectrum_difference = abs(gt_magnitude - recon_magnitude)
+
+        latent_zero_amp = latent_field_amp = latent_phase = latent_spatial_phase = latent_difference = None
+        camera_energy_sum = full_energy_sum = None
+        if model is not None:
+            net = get_model_core(model)
+            sensor_layer = next((layer for layer in net.encoder.layers if isinstance(layer, SensorLayer)), None)
+            if sensor_layer is not None:
+                with torch.no_grad():
+                    x_probe = all_imgs[idx:idx + 1].to(device)
+                    for layer in net.encoder.layers:
+                        x_probe = layer(x_probe)
+                        if isinstance(x_probe, (tuple, list)):
+                            x_probe = x_probe[0]
+                        if layer is sensor_layer:
+                            sensor_energy = x_probe[0, 0].detach().float().cpu()
+                            field = sensor_layer.last_field[0, 0].detach().cpu()
+                            break
+                zero_fft = torch.fft.fftshift(torch.fft.fft2(torch.sqrt(torch.clamp(sensor_energy, min=0.0))))
+                field_fft = torch.fft.fftshift(torch.fft.fft2(field))
+                latent_zero_amp = torch.log1p(torch.abs(zero_fft)).numpy()
+                latent_field_amp = torch.log1p(torch.abs(field_fft)).numpy()
+                latent_phase = ((torch.angle(field_fft) + math.pi) / (2 * math.pi)).numpy()
+                latent_spatial_phase = ((torch.angle(field) + math.pi) / (2 * math.pi)).numpy()
+                # Total optical energy arriving inside the camera-aligned latent area.
+                # Use the complex conjugate explicitly: E * E.conj() = |E|^2.
+                camera_energy_sum = float((field * torch.conj(field)).real.sum().item())
+                full_field = sensor_layer.last_full_field[0, 0].detach().cpu()
+                full_energy_sum = float((full_field * torch.conj(full_field)).real.sum().item())
+                latent_difference = np.abs(latent_zero_amp - latent_field_amp)
 
         #! [HF-RECOVERY] Added: Radial frequency curves in cycles per pixel
         height, width = gt.shape[-2:]
@@ -452,31 +495,108 @@ def save_frequency_comparison(
             mask = (radial_frequency >= bin_start) & (radial_frequency < bin_end)
             radial_gt.append(gt_log_tensor[mask].mean().item() if mask.any() else float("nan"))
             radial_recon.append(recon_log_tensor[mask].mean().item() if mask.any() else float("nan"))
+        #! [HF-RECOVERY] Modified: Signed-log GT minus reconstruction frequency error
+        radial_difference = [
+            math.copysign(math.log1p(abs(gt_value - recon_value)), gt_value - recon_value)
+            if math.isfinite(gt_value) and math.isfinite(recon_value)
+            else float("nan")
+            for gt_value, recon_value in zip(radial_gt, radial_recon)
+        ]
 
-        mse_value = torch.mean((all_imgs[idx].float() - all_recons[idx].float()) ** 2).item()
+        if mse_values is not None:
+            mse_value = float(mse_values[idx])
+        else:
+            mse_value = torch.mean((all_imgs[idx].float() - all_recons[idx].float()) ** 2).item()
         psnr_value = compute_psnr(mse_value)
         safe_psnr = "inf" if not math.isfinite(psnr_value) else f"{psnr_value:.2f}dB"
         filename = f"PSNR_{safe_psnr}_{idx:06d}.png"
         save_path = os.path.join(frequency_root, filename)
 
         shared_max = max(float(gt_magnitude.max()), float(recon_magnitude.max()))
-        fig, axes = plt.subplots(2, 3, figsize=(12, 8))
-        axes[0, 0].imshow(gt_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
-        axes[0, 0].set_title("GT Frequency Magnitude")
-        axes[0, 1].imshow(recon_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
-        axes[0, 1].set_title("Reconstruction Frequency Magnitude")
-        axes[0, 2].imshow(spectrum_difference, cmap="viridis")
-        axes[0, 2].set_title("Absolute Difference")
-        axes[1, 0].plot(radial_centers.numpy(), radial_gt, label="GT", linewidth=2)
-        axes[1, 0].plot(radial_centers.numpy(), radial_recon, label="Reconstruction", linewidth=2)
-        axes[1, 0].set_title("Radial Frequency Spectrum")
-        axes[1, 0].set_xlabel("Spatial frequency (cycles/pixel)")
-        axes[1, 0].set_ylabel("Mean log magnitude")
-        axes[1, 0].set_xlim(0.0, 0.5)
-        axes[1, 0].grid(alpha=0.3)
-        axes[1, 0].legend()
-        axes[1, 1].axis("off")
-        axes[1, 2].axis("off")
+        #! [HF-RECOVERY] Added: Spatial-domain comparison beside frequency-domain views
+        spatial_difference = abs(gt.numpy() - recon.numpy())
+        spatial_max = max(float(gt.max()), float(recon.max()))
+        latent_image = None
+        if latent_images is not None:
+            latent_image = latent_images[idx]
+            if torch.is_tensor(latent_image):
+                latent_image = latent_image.detach().float().squeeze().cpu().numpy()
+        fig, axes = plt.subplots(4, 5, figsize=(20, 16))
+        axes[0, 0].imshow(gt.numpy(), cmap="gray", vmin=0.0, vmax=spatial_max)
+        axes[0, 0].set_title("GT Spatial")
+        axes[0, 1].imshow(recon.numpy(), cmap="gray", vmin=0.0, vmax=spatial_max)
+        axes[0, 1].set_title("Reconstruction Spatial")
+        if latent_image is not None:
+            axes[0, 2].imshow(latent_image, cmap=get_latent_cmap(config))
+            if camera_energy_sum is not None:
+                axes[0, 2].set_title(
+                    "Latent Feature\n"
+                    f"Camera energy={camera_energy_sum:.6g}\n"
+                    f"Full simulation energy={full_energy_sum:.6g}"
+                )
+            else:
+                axes[0, 2].set_title("Latent Feature")
+        else:
+            axes[0, 2].axis("off")
+        if latent_spatial_phase is not None:
+            axes[0, 3].imshow(latent_spatial_phase, cmap="twilight", vmin=0.0, vmax=1.0)
+            axes[0, 3].set_title("Latent Spatial Phase")
+            axes[0, 3].set_xlabel("phase mapped to [0, 1]")
+        else:
+            axes[0, 3].axis("off")
+        axes[0, 4].imshow(spatial_difference, cmap="magma")
+        axes[0, 4].set_title("Spatial Absolute Difference")
+        axes[1, 0].imshow(gt_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
+        axes[1, 0].set_title("GT Frequency Magnitude")
+        axes[1, 1].imshow(recon_magnitude, cmap="magma", vmin=0.0, vmax=shared_max)
+        axes[1, 1].set_title("Reconstruction Frequency Magnitude")
+        axes[1, 2].imshow(spectrum_difference, cmap="viridis")
+        axes[1, 2].set_title("Frequency Absolute Difference")
+        axes[1, 3].axis("off")
+        axes[1, 4].axis("off")
+        axes[3, 0].plot(radial_centers.numpy(), radial_gt, label="GT", linewidth=2)
+        axes[3, 0].plot(radial_centers.numpy(), radial_recon, label="Reconstruction", linewidth=2)
+        axes[3, 0].plot(
+            radial_centers.numpy(), radial_difference,
+            label="signed-log(GT - Reconstruction)", linewidth=2, linestyle="-",
+        )
+        axes[3, 0].axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+        axes[3, 0].set_title("GT vs Reconstruction Radial Spectrum")
+        axes[3, 0].set_xlabel("Spatial frequency (cycles/pixel)")
+        axes[3, 0].set_ylabel("Mean log magnitude / signed-log difference")
+        axes[3, 0].set_xlim(0.0, 0.5)
+        axes[3, 0].grid(alpha=0.3)
+        axes[3, 0].legend(fontsize=8)
+        if latent_zero_amp is not None:
+            axes[2, 0].imshow(latent_zero_amp, cmap="magma")
+            axes[2, 0].set_title("sqrt(Energy) FFT Amplitude")
+            axes[2, 1].imshow(latent_field_amp, cmap="magma")
+            axes[2, 1].set_title("Latent Field FFT Amplitude")
+            axes[2, 2].imshow(latent_phase, cmap="twilight", vmin=0.0, vmax=1.0)
+            axes[2, 2].set_title("Latent Field FFT Phase")
+            h, w = latent_zero_amp.shape
+            yy, xx = np.indices((h, w))
+            radius = np.rint(np.sqrt((yy - h // 2) ** 2 + (xx - w // 2) ** 2)).astype(int)
+            curves = []
+            for image in (latent_zero_amp, latent_field_amp, latent_difference):
+                curves.append(np.bincount(radius.ravel(), image.ravel()) / np.maximum(np.bincount(radius.ravel()), 1))
+            axes[2, 3].plot(curves[0])
+            axes[2, 3].plot(curves[1])
+            axes[2, 3].plot(curves[2])
+            axes[2, 3].set_title("Latent FFT Amplitude Comparison")
+            axes[2, 3].set_yscale("log")
+            axes[2, 3].legend(["sqrt(Energy)", "Field", "Difference"], fontsize=8)
+            axes[2, 0].set_xlabel("bright = high amplitude")
+            axes[2, 1].set_xlabel("bright = high amplitude")
+            axes[2, 2].set_xlabel("phase mapped to [0, 1]")
+            axes[2, 4].axis("off")
+        else:
+            for axis in axes[2, :]:
+                axis.axis("off")
+        axes[3, 1].axis("off")
+        axes[3, 2].axis("off")
+        axes[3, 3].axis("off")
+        axes[3, 4].axis("off")
         for axis in axes[0, :]:
             axis.axis("off")
         fig.suptitle(f"Sample {idx} | PSNR={psnr_value:.4f} dB")
@@ -488,7 +608,7 @@ def save_frequency_comparison(
 #! [HF-RECOVERY] End: Frequency-domain panel export
 
 
-def visualize_results(model, all_imgs, all_recons, model_name, num_image, config):
+def visualize_results(model, all_imgs, all_recons, model_name, num_image, config, all_mses=None):
     os.makedirs(config["results_save_dir"], exist_ok=True)
     num_image = min(num_image, len(all_imgs), len(all_recons))
 
@@ -537,7 +657,10 @@ def visualize_results(model, all_imgs, all_recons, model_name, num_image, config
     #! [HF-RECOVERY] Export FFT comparisons for the first-N panel samples
     if config.get("save_frequency_domain_panels", True):
         save_frequency_comparison(
-            all_imgs, all_recons, list(range(num_image)), model_name, config, "first_n"
+            all_imgs, all_recons, list(range(num_image)), model_name, config, "first_n",
+            mse_values=all_mses,
+            latent_images={idx: latent_maps[idx] for idx in range(num_image)} if latent_maps is not None else None,
+            model=model,
         )
 
 
@@ -674,7 +797,10 @@ def visualize_results_by_mse(all_imgs, all_recons, all_mses, model_name, config,
         #! [HF-RECOVERY] Export FFT comparisons for every MSE panel sample
         if config.get("save_frequency_domain_panels", True):
             save_frequency_comparison(
-                all_imgs, all_recons, indices, model_name, config, filename.rsplit(".", 1)[0]
+                all_imgs, all_recons, indices, model_name, config, filename.rsplit(".", 1)[0],
+                mse_values=mse_values,
+                latent_images={idx: latent_maps[col] for col, idx in enumerate(indices)} if latent_maps is not None else None,
+                model=model,
             )
 
     if config.get("save_mse_best_panel", False):
@@ -844,6 +970,39 @@ def onn_output_debug(model):
         )
         print(f"[ONN DEBUG] Saved layer '{layer_name}' E field output")
 
+        if isinstance(layer, SensorLayer) and layer.last_field is not None:
+            field = layer.last_field[0, 0].detach().cpu()
+            energy = out[0, 0].detach().float().cpu()
+            zero_fft = torch.fft.fftshift(torch.fft.fft2(torch.sqrt(torch.clamp(energy, min=0))))
+            field_fft = torch.fft.fftshift(torch.fft.fft2(field))
+            zero_amp = torch.log1p(torch.abs(zero_fft))
+            field_amp = torch.log1p(torch.abs(field_fft))
+            field_phase = torch.angle(field_fft)
+            vutils.save_image(zero_amp.unsqueeze(0), os.path.join(debug_dir, f"{layer_name}_sqrt_energy_fft_amplitude.png"), normalize=True)
+            vutils.save_image(field_amp.unsqueeze(0), os.path.join(debug_dir, f"{layer_name}_field_fft_amplitude.png"), normalize=True)
+            vutils.save_image(((field_phase + math.pi) / (2 * math.pi)).unsqueeze(0), os.path.join(debug_dir, f"{layer_name}_field_fft_phase.png"), normalize=False)
+
+            h, w = zero_fft.shape
+            yy, xx = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+            radius = torch.round(torch.sqrt((yy - h // 2) ** 2 + (xx - w // 2) ** 2)).long()
+            bins = torch.arange(radius.max().item() + 1)
+            zero_curve = torch.stack([torch.abs(zero_fft)[radius == b].mean() for b in bins])
+            field_curve = torch.stack([torch.abs(field_fft)[radius == b].mean() for b in bins])
+            difference = torch.abs(zero_curve - field_curve)
+            plt.figure(figsize=(8, 5))
+            plt.plot(zero_curve.numpy(), label="sqrt(energy), zero phase")
+            plt.plot(field_curve.numpy(), label="sensor-aligned complex field")
+            plt.plot(difference.numpy(), label="amplitude difference")
+            plt.yscale("log")
+            plt.xlabel("Frequency radius (FFT pixels)")
+            plt.ylabel("Mean |F|")
+            plt.title("SensorLayer latent FFT comparison")
+            plt.grid(True, which="both", alpha=0.3)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(debug_dir, f"{layer_name}_fft_comparison_radial.png"), dpi=150)
+            plt.close()
+
         if isinstance(layer, MaterialLayer):
             phase_image = layer.phase.detach().cpu()
             phase_for_stats = phase_image[0] if phase_image.dim() == 4 else phase_image
@@ -916,6 +1075,7 @@ if __name__ == "__main__":
                 model_name,
                 num_image=TESTING_CONFIG.get("save_first_n_reconstructions", 10),
                 config=TESTING_CONFIG,
+                all_mses=all_mses,
             )
 
             #! [HF-RECOVERY] Export the same fixed comparison samples across models
@@ -928,6 +1088,13 @@ if __name__ == "__main__":
                 fixed_rng = random.Random(fixed_seed)
                 fixed_indices = sorted(fixed_rng.sample(range(len(all_imgs)), fixed_count))
                 fixed_folder = f"fixed_comparison_seed_{fixed_seed}"
+                fixed_latent_maps = get_latent_map(
+                    model,
+                    all_imgs[fixed_indices].to(device),
+                    TESTING_CONFIG,
+                    target_size=all_recons[fixed_indices].shape[-2:]
+                    if TESTING_CONFIG.get("latent_resize_to_output", True) else None,
+                )
                 save_frequency_comparison(
                     all_imgs,
                     all_recons,
@@ -935,6 +1102,11 @@ if __name__ == "__main__":
                     model_name,
                     TESTING_CONFIG,
                     "fixed",
+                    latent_images={
+                        idx: fixed_latent_maps[position]
+                        for position, idx in enumerate(fixed_indices)
+                    },
+                    model=model,
                     output_subdir=fixed_folder,
                 )
 

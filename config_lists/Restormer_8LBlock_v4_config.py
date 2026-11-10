@@ -378,10 +378,10 @@ TRAINING_CONFIG = {
     "last_checkpoint_name": "last_checkpoint.pth",  # Filename for the latest full checkpoint
     
     # ====== TensorBoard setting ======  #! close or reduce to improve training speed
-    "tb_log_lr": False,  # Log learning rate to TensorBoard  
-    "tb_log_epoch_time": False,  # Log epoch duration to TensorBoard  
-    "tb_log_gpu_memory": False,  # Log GPU memory usage to TensorBoard  
-    "tb_log_recon_every_n_epochs": 5,  # Log reconstruction images every N epochs
+    "tb_log_lr": True,  # Log learning rate to TensorBoard  
+    "tb_log_epoch_time": True,  # Log epoch duration to TensorBoard  
+    "tb_log_gpu_memory": True,  # Log GPU memory usage to TensorBoard  
+    "tb_log_recon_every_n_epochs": 10,  # Log reconstruction images every N epochs
     "tb_log_recon_num_images": 8,  # Number of images to log for reconstruction visualization
 
 
@@ -389,6 +389,10 @@ TRAINING_CONFIG = {
     "resume_training": False,  # switch, if want to start trainging from checkpoint
     "resume_checkpoint_path": "./checkpoints_weights/Restormer_8LBlock_v4/checkpoints/epoch30_valLoss0.0123_20251026_154501.pth",  #! check before resume. ./checkpoints_weights/{run_file_name}/checkpoints/...
     
+    "reset_scheduler_on_resume": True,  #! restart scheduler from resume_learning_rate
+    "resume_learning_rate": 1.11e-6,  # override checkpoint LR after loading
+    "tensorboard_purge_step": 489,  # checkpoint epoch367 resumes at epoch368
+
     # ====== Experiments hyperparameters ======
     # === Debug ===
     "enable_profiling": False,  # extra info: para number, runtime  #! This would consume a lot of computation
@@ -445,27 +449,32 @@ TESTING_CONFIG = {
     "batch_size": 512,#128,
 
     # # load config
-    # "weight_save_dir": './checkpoints_weights/ONN_Restormer8_v1_0824/weights',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
-    # "weight_save_name": 'epoch144_loss0.0101_20260810_123923.pth',
     "weight_save_dir": './checkpoints_weights/Restormer_8LBlock_v4',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
+
+    # Model input shift test: (vertical, horizontal), in pixels.
+    # Set both values to 0 to keep the normal test behavior.
+    "input_shift": (0, 0),  #! translate the ONN input image
 
     # save config
     "results_save_dir": './results/Restormer_8LBlock_v4',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
-    "save_mse_ranked_panels": True,
-    "save_mse_best_panel": False,
+    "save_frequency_domain_panels": True,  # save frequency domain comparison
+    "fixed_comparison_seed": 42,
+    "fixed_comparison_count": 10,
+    "save_mse_ranked_panels": True,  # generate MSE-ranked panels for the best, middle, and worst reconstructions
+    "save_mse_best_panel": True,  
     "save_mse_middle_panel": True,
     "save_mse_bottom_panel": True,
-    "mse_panel_size": 30,
-    "mse_best_quantile_range": [0.0, 0.0],
-    "mse_middle_quantile_range": [0.45, 0.45],
+    "mse_panel_size": 30,  # maximum number of images to include in each MSE-ranked panel
+    "mse_best_quantile_range": [0.0, 0.1],
+    "mse_middle_quantile_range": [0.45, 0.55],
     "mse_bottom_quantile_range": [0.9, 1.0],
     "save_mse_ranked_csv": True,
     "save_psnr_distribution_table": True,
     "save_psnr_distribution_histogram": True,
-    "psnr_bin_edges": [15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
+    "psnr_bin_edges": [10, 12.5, 15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5, 55],
     "psnr_quantile_points": [0.1, 0.25, 0.5, 0.75, 0.9],
 
     # ONN debug

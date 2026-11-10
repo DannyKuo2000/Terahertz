@@ -7,6 +7,7 @@
 import os
 import csv
 import time
+import random
 from tqdm import tqdm
 
 import torch
@@ -25,6 +26,7 @@ from model.opticalSimulation import ONN
 from model.RestormerOfficial import Restormer  #! important
 # from model.Restormer261021 import Restormer  #! important
 from dataset import get_dataloaders
+from shared_training_utils import capture_rng_state
 from config import (
     DATASET_CONFIG,
     ENCODER_CONFIG,
@@ -152,7 +154,14 @@ device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cp
 # =========================================================
 # TensorBoard (rank 0 only)
 # =========================================================
-writer = SummaryWriter(TRAINING_CONFIG["writer_save_path"]) if is_main() else None
+tb_purge_step = TRAINING_CONFIG.get("tensorboard_purge_step")
+tb_purge_step = int(tb_purge_step) if tb_purge_step is not None else None
+writer = (
+    SummaryWriter(TRAINING_CONFIG["writer_save_path"], purge_step=tb_purge_step)
+    if is_main() else None
+)
+if is_main() and tb_purge_step is not None:
+    print(f"[TensorBoard] Purging old scalar events from step {tb_purge_step} onward")
 
 tb_log_lr = TRAINING_CONFIG.get("tb_log_lr", True)
 tb_log_epoch_time = TRAINING_CONFIG.get("tb_log_epoch_time", True)
@@ -305,7 +314,15 @@ if TRAINING_CONFIG.get("use_scheduler", False):
 # =========================================================
 # Save model
 # =========================================================
-def save_model(model, epoch, val_loss, optimizer=None, scheduler=None):
+def save_model(
+    model,
+    epoch,
+    val_loss,
+    optimizer=None,
+    scheduler=None,
+    global_step=0,
+    best_loss=None,
+):
 
     if not is_main():
         return
@@ -333,7 +350,10 @@ def save_model(model, epoch, val_loss, optimizer=None, scheduler=None):
     ckpt = {
         "model_state_dict": state,
         "epoch": epoch,
+        "global_step": global_step,
         "val_loss": val_loss,
+        "best_loss": val_loss if best_loss is None else best_loss,
+        "rng_state": capture_rng_state(),
     }
 
     if optimizer:
@@ -392,6 +412,8 @@ def save_named_checkpoint(
         # Validation / best model tracking
         "val_loss": val_loss,
         "best_loss": best_loss,
+        # Reproduce the next epoch's stochastic operations when resuming.
+        "rng_state": capture_rng_state(),
     }
 
     # Optimizer state
@@ -424,7 +446,11 @@ def load_checkpoint(
     # Model
     # ---------------------------------------------------------
 
-    model.load_state_dict(
+    # Checkpoints are saved from the unwrapped model, while DDP exposes the
+    # same model under the additional "module." prefix.  Load into the
+    # underlying module to support both single-GPU and DDP resumes.
+    model_to_load = model.module if hasattr(model, "module") else model
+    model_to_load.load_state_dict(
         checkpoint["model_state_dict"]
     )
 
@@ -449,6 +475,37 @@ def load_checkpoint(
             scheduler.load_state_dict(
                 checkpoint["scheduler_state_dict"]
             )
+
+    # ---------------------------------------------------------
+    # Random states
+    # ---------------------------------------------------------
+    rng_state = checkpoint.get("rng_state")
+    if rng_state is not None:
+        if "python" in rng_state:
+            random.setstate(rng_state["python"])
+        if "torch" in rng_state:
+            torch_rng = rng_state["torch"]
+            # Older checkpoints may contain RNG state as a list/array rather
+            # than the ByteTensor required by torch.set_rng_state().
+            if not (torch.is_tensor(torch_rng) and torch_rng.dtype == torch.uint8):
+                torch_rng = torch.as_tensor(torch_rng, dtype=torch.uint8)
+            try:
+                torch.set_rng_state(torch_rng.detach().cpu().contiguous())
+            except (TypeError, RuntimeError) as exc:
+                print(f"[WARNING] Could not restore CPU RNG state; continuing: {exc}")
+        if torch.cuda.is_available() and rng_state.get("cuda") is not None:
+            cuda_rng = rng_state["cuda"]
+            cuda_rng = [
+                state if (torch.is_tensor(state) and state.dtype == torch.uint8)
+                else torch.as_tensor(state, dtype=torch.uint8)
+                for state in cuda_rng
+            ]
+            try:
+                torch.cuda.set_rng_state_all(
+                    [state.detach().cpu().contiguous() for state in cuda_rng]
+                )
+            except (TypeError, RuntimeError) as exc:
+                print(f"[WARNING] Could not restore CUDA RNG state; continuing: {exc}")
         else:
             print("[WARNING] Scheduler state not found.")
 
@@ -747,6 +804,23 @@ def train_model(
                 if scheduler is not None:
                     scheduler.step()
 
+                # Resume/scheduler diagnostic: print the actual LR at high
+                # precision so small cosine changes are visible in terminal.
+                if (
+                    scheduler is not None
+                    and is_main()
+                    and global_step % 100 == 0
+                ):
+                    print(
+                        f"[LR DEBUG] step={global_step}, "
+                        f"scheduler={type(scheduler).__name__}, "
+                        f"last_epoch={scheduler.last_epoch}, "
+                        f"base_lrs={scheduler.base_lrs}, "
+                        f"eta_min={getattr(scheduler, 'eta_min', None)}, "
+                        f"T_max={getattr(scheduler, 'T_max', None)}, "
+                        f"optimizer_lr={optimizer.param_groups[0]['lr']:.12e}"
+                    )
+
                 # Prepare for next accumulation window
                 optimizer.zero_grad(set_to_none=True)
                 accum_counter = 0
@@ -842,6 +916,8 @@ def train_model(
                     val_loss,
                     optimizer,
                     scheduler,
+                    global_step,
+                    best_loss,
                 )
 
                 save_named_weights(best_model_name)
@@ -866,6 +942,8 @@ def train_model(
                 last_checkpoint_name,
                 epoch,
                 val_loss,
+                global_step,
+                best_loss,
                 optimizer,
                 scheduler,
             )
@@ -900,7 +978,60 @@ def validate_model(epoch):
 # Entry
 # =========================================================
 if __name__ == "__main__":
-    train_model()
+    start_epoch = 0
+    global_step = 0
+    best_loss = float("inf")
+
+    if TRAINING_CONFIG.get("resume_training", False):
+        resume_path = TRAINING_CONFIG.get("resume_checkpoint_path")
+        if not resume_path:
+            raise ValueError(
+                "resume_training=True but resume_checkpoint_path is empty."
+            )
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(
+                f"Resume checkpoint not found: {resume_path}"
+            )
+        start_epoch, global_step, best_loss = load_checkpoint(
+            resume_path,
+            model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+        )
+
+        # A checkpoint restores its original optimizer/scheduler state.  Apply
+        # an explicit LR override after loading so a corrected LR is effective.
+        resume_lr = TRAINING_CONFIG.get("resume_learning_rate")
+        if resume_lr is not None:
+            resume_lr = float(resume_lr)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = resume_lr
+
+            if scheduler is not None and TRAINING_CONFIG.get("reset_scheduler_on_resume", False):
+                # scheduler.load_state_dict() above restores the old
+                # eta_min/T_max from the checkpoint.  Explicitly restore the
+                # current config values when resetting the scheduler.
+                current_scheduler_params = TRAINING_CONFIG.get("scheduler_params", {})
+                if hasattr(scheduler, "eta_min") and "eta_min" in current_scheduler_params:
+                    scheduler.eta_min = float(current_scheduler_params["eta_min"])
+                if hasattr(scheduler, "T_max") and "T_max" in current_scheduler_params:
+                    scheduler.T_max = int(current_scheduler_params["T_max"])
+                scheduler.last_epoch = -1
+                scheduler._step_count = 0
+                scheduler.base_lrs = [resume_lr for _ in optimizer.param_groups]
+                scheduler._last_lr = [resume_lr for _ in optimizer.param_groups]
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = resume_lr
+                print(f"[RESUME] Scheduler reset; learning_rate={resume_lr:.3e}")
+            else:
+                print(f"[RESUME] Optimizer learning rate overridden to {resume_lr:.3e}")
+
+    train_model(
+        start_epoch=start_epoch,
+        global_step=global_step,
+        best_loss=best_loss,
+    )
 
     if writer is not None:
         writer.close()
