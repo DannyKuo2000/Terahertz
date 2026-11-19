@@ -1,5 +1,7 @@
-## Restormer: Efficient Transformer for High-Resolution Image Restoration
-## Modified in local version in 261021
+"""
+Restormer: Efficient Transformer for High-Resolution Image Restoration
+Modified in local version in 261021
+"""
 
 import torch
 import torch.nn as nn

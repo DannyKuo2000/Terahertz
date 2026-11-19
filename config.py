@@ -183,6 +183,19 @@ ENCODER_CONFIG = {
         },
     ],
 
+    # ====== Virtual CNN layer ======
+    # A standard CNN preprocessor for comparison with phase-only ONN layers.
+    "virtual_cnn_configs": [
+        {
+            "name": "VirtualCNN1",
+            "in_channels": 1,
+            "hidden_channels": 8,
+            "out_channels": 1,
+            "num_layers": 3,
+            "kernel_size": 3,
+            "bias": True,
+        },
+    ],
 
     #====== LensLayer ======
     # Each lens needs its own config because a 4F system can use different focal lengths/apertures.
@@ -285,6 +298,9 @@ OPTICAL_CHAIN = [
 ]
 
 
+# Make the declarative chain available to ONN(config=ENCODER_CONFIG).
+# ENCODER_CONFIG["OPTICAL_CHAIN"] = OPTICAL_CHAIN
+
 # --------------------------------------------------
 # Restormer Configuration
 # --------------------------------------------------
@@ -332,9 +348,8 @@ AUTOENCODER_CONFIG = {
 #! [TEACHER-STUDENT-261106] Begin: Integrated teacher/student configuration
 RESTORMER_261106_CONFIG = dict(RESTORMER_CONFIG)
 RESTORMER_261106_CONFIG.update({
+    "teacher_use_energy": False,  # False: [amplitude, sin(phase), cos(phase)], True:  [energy=amplitude**2, sin(phase), cos(phase)]
     "teacher_dim": 16,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
-    # Attention heads for teacher at levels 1/2/3/latent.
-    # Each value must divide the corresponding teacher channel count.
     "teacher_heads": [1, 2, 4, 8],  #! each head should be factors of teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
     "teacher_num_blocks": [1, 1, 1, 1],
     "teacher_num_refinement_blocks": 1,
@@ -351,7 +366,7 @@ TRAINING_CONFIG = {
     # ====== Save path & model setting ======
     "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
     "writer_save_path": "runs/Restormer_ONN8LBlock_TS_v1",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
-    "csv_log_enabled": False,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
+    "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
     "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
@@ -367,12 +382,12 @@ TRAINING_CONFIG = {
 
 
     # ====== Resume training ======
-    "resume_training": False,  #! switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/checkpoints/epoch488_loss0.0053_20261106_133423.pth",  #! full checkpoint
+    "resume_training": True,  #! switch, if want to start trainging from checkpoint
+    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
     
-    "reset_scheduler_on_resume": False,  #! restart scheduler from resume_learning_rate
-    "resume_learning_rate": 1.11e-6,  # override checkpoint LR after loading
-    "tensorboard_purge_step": 489,  # checkpoint epoch367 resumes at epoch368
+    "reset_scheduler_on_resume": True,  #! restart scheduler from resume_learning_rate
+    "resume_learning_rate": 1e-7,  # override checkpoint LR after loading
+    "tensorboard_purge_step": 461,  # checkpoint epoch367 resumes at epoch368
     
     # ====== Experiments hyperparameters ======
     # === Debug ===
@@ -385,20 +400,20 @@ TRAINING_CONFIG = {
     
     # === Memory and Time Optimization ===
     "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
-    "grad_accum_steps": 5,  # number of mini batches  #!
+    "grad_accum_steps": 1,  # number of mini batches  #!
     
     # === Training hyperparameters ===
-    "global_batch_size": 8,  #!
-    "epochs": 500,
+    "global_batch_size": 40,  #!
+    "epochs": 5000,
     # "max_iterations": 700_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
-    "max_iterations": 300_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    "max_iterations": 1_500_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
 
     # loss
     "loss": "L1",
 
     # Optimizer
     "optimizer": "AdamW",
-    "learning_rate": 3e-4,
+    "learning_rate": 3e-4,  # original learning rate: 3e-4
     "optimizer_params": {  # params for AdamW
         "betas": (0.9, 0.999),
         "weight_decay": 1e-4,
@@ -408,9 +423,9 @@ TRAINING_CONFIG = {
     "use_scheduler": True,
     "scheduler_type": "CosineAnnealingLR",
     "scheduler_params": {
-        "T_max": 300_000,  # how many scheduler.step() to reach "eta_min"
-        # "T_max": 200_000,
-        "eta_min": 1e-6,
+        # "T_max": 1_500_000,  # how many scheduler.step() to reach "eta_min"
+        "T_max": 250_000,
+        "eta_min": 1e-8,  # original eta_min: 1e-6,
     },
 
     # ====== Phase Local Contrast loss =======
@@ -485,7 +500,7 @@ LATENT_ANALYSIS_CONFIG = {
     # === Parallel ===
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 128,
+    "batch_size": 512,
 
     # load config
     "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights

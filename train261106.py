@@ -8,6 +8,7 @@ import os
 import csv
 import time
 import random
+import math
 from tqdm import tqdm
 
 import torch
@@ -199,20 +200,24 @@ class TeacherStudentAutoencoder(nn.Module):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
+        self.teacher_use_energy = RESTORMER_CONFIG.get("teacher_use_energy", False)
 
     def forward(self, x):
         energy = self.encoder(x)
         if isinstance(energy, (tuple, list)):
             energy = energy[0]
         field = get_sensor_field(self.encoder)
-        teacher_input = teacher_input_from_field(field)
+        teacher_input = teacher_input_from_field(
+            field, use_energy=self.teacher_use_energy
+        )
         return self.decoder.forward_teacher_student(energy, teacher_input)
 
 
-def teacher_input_from_field(field):
+def teacher_input_from_field(field, use_energy=False):
     amplitude = torch.abs(field)
+    magnitude = amplitude.square() if use_energy else amplitude
     phase = torch.angle(field)
-    return torch.cat([amplitude, torch.sin(phase), torch.cos(phase)], dim=1)
+    return torch.cat([magnitude, torch.sin(phase), torch.cos(phase)], dim=1)
 
 
 model = TeacherStudentAutoencoder(encoder, decoder).to(device)
@@ -577,6 +582,10 @@ def init_csv_log():
                 "epoch",
                 "train_loss",
                 "val_loss",
+                "train_MSE",
+                "val_MSE",
+                "train_PSNR",
+                "val_PSNR",
                 "lr",
                 "epoch_time_sec",
                 "gpu_mem_allocated_mb",
@@ -585,7 +594,7 @@ def init_csv_log():
             ])
 
 
-def append_csv_log(epoch, train_loss, val_loss, lr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb):
+def append_csv_log(epoch, train_loss, val_loss, train_mse, val_mse, train_psnr, val_psnr, lr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb):
     if not is_main() or not csv_log_enabled:
         return
 
@@ -595,6 +604,10 @@ def append_csv_log(epoch, train_loss, val_loss, lr, epoch_time_sec, gpu_mem_allo
             epoch + 1,
             train_loss,
             val_loss,
+            train_mse,
+            val_mse,
+            train_psnr,
+            val_psnr,
             lr,
             epoch_time_sec,
             gpu_mem_allocated_mb,
@@ -607,10 +620,18 @@ def get_current_lr():
     return optimizer.param_groups[0]["lr"]
 
 
+def mse_to_psnr(mse, max_pixel=1.0):
+    if mse <= 0:
+        return float("inf")
+    return 10.0 * math.log10((max_pixel ** 2) / mse)
+
+
 def get_hf_recovery_gamma_values(model):
     model_core = model.module if hasattr(model, "module") else model
     decoder = getattr(model_core, "decoder", None)
-    decoder_core = decoder.module if distributed else decoder
+    # `distributed=True` means the top-level model may be DDP-wrapped;
+    # the nested decoder is not necessarily wrapped independently.
+    decoder_core = decoder.module if hasattr(decoder, "module") else decoder
     student_decoder = getattr(decoder_core, "student", decoder_core)
     gammas = getattr(student_decoder, "refinement_recovery_gammas", None)
     if gammas is None:
@@ -657,12 +678,16 @@ def log_reconstruction_to_tensorboard(epoch):
         model.train()
 
 
-def log_epoch_to_tensorboard(epoch, train_loss, val_loss, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb, hf_recovery_gammas=None):
+def log_epoch_to_tensorboard(epoch, train_loss, val_loss, train_mse, val_mse, train_psnr, val_psnr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb, hf_recovery_gammas=None):
     if not writer:
         return
 
     writer.add_scalar("train/loss", train_loss, epoch)
     writer.add_scalar("val/loss", val_loss, epoch)
+    writer.add_scalar("train/MSE", train_mse, epoch)
+    writer.add_scalar("val/MSE", val_mse, epoch)
+    writer.add_scalar("train/PSNR", train_psnr, epoch)
+    writer.add_scalar("val/PSNR", val_psnr, epoch)
 
     #! [HF-RECOVERY] Log each refinement injection strength to TensorBoard
     for gamma_name, gamma_value in (hf_recovery_gammas or {}).items():
@@ -764,6 +789,10 @@ def train_model(
         model.train()
 
         total_loss = 0.0
+        total_mse = 0.0
+        total_mse_elements = 0
+        epoch_batches = 0
+        epoch_optimizer_updates = 0
 
         grad_accum_steps = TRAINING_CONFIG.get("grad_accum_steps", 1)
 
@@ -780,6 +809,7 @@ def train_model(
                 break
 
             imgs = imgs.to(device)
+            epoch_batches += 1
 
             # =====================================================
             # Forward
@@ -817,6 +847,8 @@ def train_model(
                 + RESTORMER_CONFIG.get("distillation_loss_weight", 0.05) * distill_loss
                 + RESTORMER_CONFIG.get("feature_distillation_weight", 0.05) * feature_distill_loss
             )
+            total_mse += F.mse_loss(student_out, imgs, reduction="sum").item()
+            total_mse_elements += imgs.numel()
 
             # =====================================================
             # Backward
@@ -850,6 +882,10 @@ def train_model(
 
                 optimizer.step()
 
+                # One optimizer update is one training iteration.
+                # With grad_accum_steps=1, this is exactly one batch.
+                global_step += 1
+
                 # =================================================
                 # Scheduler update
                 # =================================================
@@ -878,27 +914,35 @@ def train_model(
                 optimizer.zero_grad(set_to_none=True)
                 accum_counter = 0
 
-                # One optimizer update = one global iteration
-                global_step += 1
+                epoch_optimizer_updates += 1
 
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
+        train_mse = total_mse / max(1, total_mse_elements)
+        train_psnr = mse_to_psnr(train_mse)
 
         epoch_time_sec = time.perf_counter() - epoch_t0
 
         if is_main():
+            epoch_lr = get_current_lr()
             print(
                 f"Epoch {epoch + 1} | "
-                f"Iteration {global_step}/{max_iterations} | "
-                f"Loss: {avg_loss:.4f}"
+                f"batches={epoch_batches}, "
+                f"updates={epoch_optimizer_updates}, "
+                f"global_iteration={global_step}/{max_iterations} | "
+                f"Loss: {avg_loss:.4f} | "
+                f"LR: {epoch_lr:.12e}"
             )
 
         # =========================================================
         # Validation
         # =========================================================
 
-        val_loss = validate_model(epoch) if is_main() else float("inf")
+        if is_main():
+            val_loss, val_mse, val_psnr = validate_model(epoch)
+        else:
+            val_loss, val_mse, val_psnr = float("inf"), float("inf"), float("-inf")
 
         # =========================================================
         # GPU memory
@@ -939,6 +983,10 @@ def train_model(
                 epoch,
                 avg_loss,
                 val_loss,
+                train_mse,
+                val_mse,
+                train_psnr,
+                val_psnr,
                 epoch_time_sec,
                 gpu_mem_allocated_mb,
                 gpu_mem_reserved_mb,
@@ -949,6 +997,10 @@ def train_model(
                 epoch,
                 avg_loss,
                 val_loss,
+                train_mse,
+                val_mse,
+                train_psnr,
+                val_psnr,
                 lr,
                 epoch_time_sec,
                 gpu_mem_allocated_mb,
@@ -1011,6 +1063,8 @@ def validate_model(epoch):
 
     model.eval()
     total = 0.0
+    total_mse = 0.0
+    total_mse_elements = 0
 
     with torch.no_grad():
         for imgs, _ in valid_loader:
@@ -1019,12 +1073,16 @@ def validate_model(epoch):
             out = get_reconstruction(student_output)
 
             total += criterion(out, imgs).item()
+            total_mse += F.mse_loss(out, imgs, reduction="sum").item()
+            total_mse_elements += imgs.numel()
 
     loss = total / len(valid_loader)
+    mse = total_mse / max(1, total_mse_elements)
+    psnr = mse_to_psnr(mse)
 
-    print(f"[VAL] epoch {epoch+1}: {loss:.4f}")
+    print(f"[VAL] epoch {epoch+1}: loss={loss:.4f}, MSE={mse:.6e}, PSNR={psnr:.4f} dB")
 
-    return loss
+    return loss, mse, psnr
 
 
 # =========================================================

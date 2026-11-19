@@ -8,10 +8,12 @@ import os
 import csv
 import time
 import random
+import math
 from tqdm import tqdm
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
@@ -545,6 +547,10 @@ def init_csv_log():
                 "epoch",
                 "train_loss",
                 "val_loss",
+            "train_MSE",
+            "val_MSE",
+            "train_PSNR",
+            "val_PSNR",
                 "lr",
                 "epoch_time_sec",
                 "gpu_mem_allocated_mb",
@@ -553,7 +559,7 @@ def init_csv_log():
             ])
 
 
-def append_csv_log(epoch, train_loss, val_loss, lr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb):
+def append_csv_log(epoch, train_loss, val_loss, train_mse, val_mse, train_psnr, val_psnr, lr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb):
     if not is_main() or not csv_log_enabled:
         return
 
@@ -563,6 +569,10 @@ def append_csv_log(epoch, train_loss, val_loss, lr, epoch_time_sec, gpu_mem_allo
             epoch + 1,
             train_loss,
             val_loss,
+            train_mse,
+            val_mse,
+            train_psnr,
+            val_psnr,
             lr,
             epoch_time_sec,
             gpu_mem_allocated_mb,
@@ -573,6 +583,12 @@ def append_csv_log(epoch, train_loss, val_loss, lr, epoch_time_sec, gpu_mem_allo
 
 def get_current_lr():
     return optimizer.param_groups[0]["lr"]
+
+
+def mse_to_psnr(mse, max_pixel=1.0):
+    if mse <= 0:
+        return float("inf")
+    return 10.0 * math.log10((max_pixel ** 2) / mse)
 
 
 def get_hf_recovery_gamma_values(model):
@@ -623,12 +639,16 @@ def log_reconstruction_to_tensorboard(epoch):
         model.train()
 
 
-def log_epoch_to_tensorboard(epoch, train_loss, val_loss, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb, hf_recovery_gammas=None):
+def log_epoch_to_tensorboard(epoch, train_loss, val_loss, train_mse, val_mse, train_psnr, val_psnr, epoch_time_sec, gpu_mem_allocated_mb, gpu_mem_reserved_mb, hf_recovery_gammas=None):
     if not writer:
         return
 
     writer.add_scalar("train/loss", train_loss, epoch)
     writer.add_scalar("val/loss", val_loss, epoch)
+    writer.add_scalar("train/MSE", train_mse, epoch)
+    writer.add_scalar("val/MSE", val_mse, epoch)
+    writer.add_scalar("train/PSNR", train_psnr, epoch)
+    writer.add_scalar("val/PSNR", val_psnr, epoch)
 
     #! [HF-RECOVERY] Log each refinement injection strength to TensorBoard
     for gamma_name, gamma_value in (hf_recovery_gammas or {}).items():
@@ -730,6 +750,10 @@ def train_model(
         model.train()
 
         total_loss = 0.0
+        total_mse = 0.0
+        total_mse_elements = 0
+        epoch_batches = 0
+        epoch_optimizer_updates = 0
 
         grad_accum_steps = TRAINING_CONFIG.get("grad_accum_steps", 1)
 
@@ -746,6 +770,7 @@ def train_model(
                 break
 
             imgs = imgs.to(device)
+            epoch_batches += 1
 
             # =====================================================
             # Forward
@@ -760,10 +785,15 @@ def train_model(
                 valid_mask = shift_tensor_zero_fill(torch.ones_like(imgs), dy, dx)
                 shifted_error = torch.abs(out - shifted_target)
                 loss = (shifted_error * valid_mask).sum() / valid_mask.sum().clamp_min(1.0)
+                metric_target = shifted_target
             else:
                 outputs = model(imgs)
                 out = get_reconstruction(outputs)
                 loss = criterion(out, imgs)
+                metric_target = imgs
+
+            total_mse += F.mse_loss(out, metric_target, reduction="sum").item()
+            total_mse_elements += metric_target.numel()
 
             # =====================================================
             # Backward
@@ -797,6 +827,11 @@ def train_model(
 
                 optimizer.step()
 
+                # One optimizer update is one training iteration.
+                # With grad_accum_steps=1, this is exactly one batch.
+                global_step += 1
+                epoch_optimizer_updates += 1
+
                 # =================================================
                 # Scheduler update
                 # =================================================
@@ -825,27 +860,34 @@ def train_model(
                 optimizer.zero_grad(set_to_none=True)
                 accum_counter = 0
 
-                # One optimizer update = one global iteration
-                global_step += 1
 
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
+        train_mse = total_mse / max(1, total_mse_elements)
+        train_psnr = mse_to_psnr(train_mse)
 
         epoch_time_sec = time.perf_counter() - epoch_t0
 
         if is_main():
+            epoch_lr = get_current_lr()
             print(
                 f"Epoch {epoch + 1} | "
-                f"Iteration {global_step}/{max_iterations} | "
-                f"Loss: {avg_loss:.4f}"
+                f"batches={epoch_batches}, "
+                f"updates={epoch_optimizer_updates}, "
+                f"global_iteration={global_step}/{max_iterations} | "
+                f"Loss: {avg_loss:.4f} | "
+                f"LR: {epoch_lr:.12e}"
             )
 
         # =========================================================
         # Validation
         # =========================================================
 
-        val_loss = validate_model(epoch) if is_main() else float("inf")
+        if is_main():
+            val_loss, val_mse, val_psnr = validate_model(epoch)
+        else:
+            val_loss, val_mse, val_psnr = float("inf"), float("inf"), float("-inf")
 
         # =========================================================
         # GPU memory
@@ -886,6 +928,10 @@ def train_model(
                 epoch,
                 avg_loss,
                 val_loss,
+                train_mse,
+                val_mse,
+                train_psnr,
+                val_psnr,
                 epoch_time_sec,
                 gpu_mem_allocated_mb,
                 gpu_mem_reserved_mb,
@@ -896,6 +942,10 @@ def train_model(
                 epoch,
                 avg_loss,
                 val_loss,
+                train_mse,
+                val_mse,
+                train_psnr,
+                val_psnr,
                 lr,
                 epoch_time_sec,
                 gpu_mem_allocated_mb,
@@ -958,6 +1008,8 @@ def validate_model(epoch):
 
     model.eval()
     total = 0.0
+    total_mse = 0.0
+    total_mse_elements = 0
 
     with torch.no_grad():
         for imgs, _ in valid_loader:
@@ -966,12 +1018,16 @@ def validate_model(epoch):
             out = get_reconstruction(outputs)
 
             total += criterion(out, imgs).item()
+            total_mse += F.mse_loss(out, imgs, reduction="sum").item()
+            total_mse_elements += imgs.numel()
 
     loss = total / len(valid_loader)
+    mse = total_mse / max(1, total_mse_elements)
+    psnr = mse_to_psnr(mse)
 
-    print(f"[VAL] epoch {epoch+1}: {loss:.4f}")
+    print(f"[VAL] epoch {epoch+1}: loss={loss:.4f}, MSE={mse:.6e}, PSNR={psnr:.4f} dB")
 
-    return loss
+    return loss, mse, psnr
 
 
 # =========================================================

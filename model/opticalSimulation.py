@@ -1147,6 +1147,39 @@ class MaterialLayer(nn.Module):
         else:
             return x * phase_mask
 
+
+class VirtualCNNLayer(nn.Module):
+    """A digital CNN preprocessor inserted into the optical chain.
+
+    The CNN operates on input intensity and predicts an amplitude map.  The
+    predicted intensity is constrained to [0, 1], converted to amplitude with
+    sqrt(), and combined with the incoming field phase before propagation.
+    """
+    def __init__(self, in_channels=1, hidden_channels=8, out_channels=1, num_layers=3, kernel_size=3, bias=True):
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError("VirtualCNNLayer num_layers must be >= 1")
+        if kernel_size % 2 == 0:
+            raise ValueError("VirtualCNNLayer kernel_size must be odd")
+
+        padding = kernel_size // 2
+        layers = []
+        channels = in_channels
+        for layer_index in range(num_layers):
+            next_channels = out_channels if layer_index == num_layers - 1 else hidden_channels
+            layers.append(nn.Conv2d(channels, next_channels, kernel_size, padding=padding, bias=bias))
+            if layer_index != num_layers - 1:
+                layers.append(nn.GELU())
+            channels = next_channels
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, E):
+        input_phase = torch.angle(E) if torch.is_complex(E) else torch.zeros_like(E)
+        intensity = torch.abs(E) ** 2 if torch.is_complex(E) else E.clamp_min(0.0)
+        predicted_intensity = torch.sigmoid(self.network(intensity.float()))
+        predicted_amplitude = torch.sqrt(predicted_intensity.clamp_min(0.0))
+        return predicted_amplitude * torch.exp(1j * input_phase)
+
 # ====== ONN ensemblance ======
 class ONN(nn.Module):
     def __init__(self, config=ENCODER_CONFIG):
@@ -1164,6 +1197,7 @@ class ONN(nn.Module):
         diffractive_configs = config["diffractive_configs"]
         lens_configs = config["lens_configs"]
         material_configs = config.get("material_configs", [])
+        virtual_cnn_configs = config.get("virtual_cnn_configs", [])
 
         # Source
         use_input = config["use_input"]
@@ -1316,11 +1350,29 @@ class ONN(nn.Module):
                         MaterialLayer(
                             num_size=material_cfg["num_size"],
                             block_size=material_cfg["block_size"],
-                            mode=material_cfg["mode"],
-                            border_width=material_cfg["border_width"],
+                            mode=material_cfg.get("mode", "default"),
+                            border_width=material_cfg.get("border_width", None),
                             return_phases=material_cfg["return_phases"],
                         ),
                         layer_name or material_cfg.get("name", f"Material{idx}")
+                    )
+
+                elif layer_type == "virtual_cnn":
+                    idx = spec.get("index", 0)
+                    if not virtual_cnn_configs:
+                        raise ValueError("virtual_cnn layer requested but virtual_cnn_configs is empty")
+                    cnn_cfg = dict(virtual_cnn_configs[idx])
+                    cnn_cfg.update(params_override)
+                    append_named_layer(
+                        VirtualCNNLayer(
+                            in_channels=cnn_cfg.get("in_channels", 1),
+                            hidden_channels=cnn_cfg.get("hidden_channels", 8),
+                            out_channels=cnn_cfg.get("out_channels", 1),
+                            num_layers=cnn_cfg.get("num_layers", 3),
+                            kernel_size=cnn_cfg.get("kernel_size", 3),
+                            bias=cnn_cfg.get("bias", True),
+                        ),
+                        layer_name or cnn_cfg.get("name", f"VirtualCNN{idx}")
                     )
 
                 elif layer_type == "lens":

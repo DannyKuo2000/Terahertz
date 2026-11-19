@@ -15,16 +15,62 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from config import (
-    AUTOENCODER_CONFIG,
     DATASET_CONFIG,
     ENCODER_CONFIG,
     LATENT_ANALYSIS_V2_CONFIG,
-    RESTORMER_CONFIG,
+    RESTORMER_261106_CONFIG as RESTORMER_CONFIG,
 )
 from dataset import get_dataloaders
-from model.autoencoder import Autoencoder
 from model.opticalSimulation import ONN
-from model.RestormerOfficial import Restormer
+# ================================================================
+# Model adapter: this is the only section you should change when
+# analyzing another model version.
+#
+# The model must satisfy:
+#   latent = encoder(image)
+#   reconstruction = decoder(latent)
+# If the checkpoint was trained with a different Restormer variant,
+# change these two imports/configs to the matching pair.
+# ================================================================
+from model.Restormer261106 import Restormer
+
+
+class LatentAnalysisModel(torch.nn.Module):
+    """Common interface used by the model-independent analysis code."""
+
+    def __init__(self, encoder, decoder):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def encode(self, image):
+        output = self.encoder(image)
+        return output[0] if isinstance(output, (tuple, list)) else output
+
+    def decode(self, latent):
+        output = self.decoder(latent)
+        return select_decoder_output(output)
+
+
+def _strip_module_prefix(state_dict):
+    return {
+        key[len("module."):] if key.startswith("module.") else key: value
+        for key, value in state_dict.items()
+    }
+
+
+def _extract_prefixed_state(state_dict, prefix):
+    return {
+        key[len(prefix):]: value
+        for key, value in state_dict.items()
+        if key.startswith(prefix)
+    }
+
+
+def _checkpoint_state(checkpoint):
+    if not isinstance(checkpoint, dict):
+        return checkpoint
+    return checkpoint.get("model_state_dict", checkpoint)
 
 
 def is_distributed():
@@ -64,10 +110,10 @@ print(f"Device: {device} | Distributed: {distributed}, Local Rank: {local_rank}"
 def build_model():
     encoder = ONN(ENCODER_CONFIG).to(device)
     decoder = Restormer(RESTORMER_CONFIG).to(device)
-    model = Autoencoder(
+
+    model = LatentAnalysisModel(
         encoder=encoder,
         decoder=decoder,
-        config=AUTOENCODER_CONFIG,
     ).to(device)
 
     if distributed:
@@ -109,24 +155,41 @@ def prepare_test_loader():
 
 def load_model(model, model_path):
     checkpoint = torch.load(model_path, map_location=device)
-    state_dict = (
-        checkpoint.get("model_state_dict", checkpoint)
-        if isinstance(checkpoint, dict)
-        else checkpoint
-    )
 
-    if hasattr(model, "module"):
-        missing, unexpected = model.module.load_state_dict(state_dict, strict=False)
+    if not isinstance(checkpoint, dict):
+        raise TypeError(
+            f"Unsupported checkpoint format at {model_path}: "
+            f"expected a dictionary, got {type(checkpoint).__name__}."
+        )
+
+    core = get_model_core(model)
+    state_dict = _checkpoint_state(checkpoint)
+    if not isinstance(state_dict, dict):
+        raise TypeError("Checkpoint state must be a dictionary.")
+    state_dict = _strip_module_prefix(state_dict)
+
+    # The analysis model always contains exactly encoder and decoder. This
+    # works for both ordinary Autoencoders and wrappers such as teacher/student
+    # Restormers, provided the correct classes were imported above.
+    if "encoder_state_dict" in checkpoint and "decoder_state_dict" in checkpoint:
+        encoder_state = _strip_module_prefix(checkpoint["encoder_state_dict"])
+        decoder_state = _strip_module_prefix(checkpoint["decoder_state_dict"])
     else:
-        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        encoder_state = _extract_prefixed_state(state_dict, "encoder.")
+        decoder_state = _extract_prefixed_state(state_dict, "decoder.")
+
+    if not encoder_state:
+        raise KeyError("Could not find encoder weights in the checkpoint.")
+    if not decoder_state:
+        raise KeyError("Could not find decoder weights in the checkpoint.")
+
+    core.encoder.load_state_dict(encoder_state, strict=True)
+    core.decoder.load_state_dict(decoder_state, strict=True)
+    load_description = "encoder + decoder (strict)"
 
     model.eval()
     if is_main():
-        print(f"Model loaded from {model_path}")
-        if missing:
-            print(f"[load_model] Missing keys ignored: {missing}")
-        if unexpected:
-            print(f"[load_model] Unexpected keys ignored: {unexpected}")
+        print(f"Model loaded from {model_path} ({load_description})")
     return model
 
 
@@ -166,15 +229,9 @@ def select_decoder_output(output):
 
 
 def get_onn_output(model, img):
-    encoder = get_model_core(model).encoder
-
-    x = img
-    for layer in encoder.layers:
-        x = layer(x)
-        if isinstance(x, (tuple, list)):
-            x = x[0]
-
-    return x
+    # Use the same encoder entry point as evaluation. Calling individual
+    # layers here can bypass model-specific encoder behavior or state.
+    return get_model_core(model).encode(img)
 
 
 def ensure_dir(path):
@@ -264,9 +321,7 @@ def build_region_mask(region_map, region_ids, latent):
 
 
 def decode_latent(model, latent):
-    decoder = get_model_core(model).decoder
-    recons = decoder(latent)
-    return select_decoder_output(recons)
+    return get_model_core(model).decode(latent)
 
 
 def maybe_complex_to_real(tensor):

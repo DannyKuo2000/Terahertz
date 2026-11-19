@@ -1,4 +1,5 @@
-"""Teacher/student Restormer variant for the 2026-11-06 experiment.
+"""
+Teacher/student Restormer variant for the 2026-11-06 experiment.
 
 The student keeps the existing RestormerOfficial interface.  The teacher is
 smaller and is used only when a training-time optical field is supplied.
@@ -19,16 +20,10 @@ class Restormer(nn.Module):
         self.student = OfficialRestormer(config)
 
         teacher_config = copy.deepcopy(config)
-        teacher_config["dim"] = config.get("teacher_dim", max(16, config["dim"] // 2))
-        teacher_config["num_blocks"] = config.get(
-            "teacher_num_blocks", [1, 2, 2, 2]
-        )
-        teacher_config["heads"] = config.get(
-            "teacher_heads", [1, 2, 4, 8]
-        )
-        teacher_config["num_refinement_blocks"] = config.get(
-            "teacher_num_refinement_blocks", 2
-        )
+        teacher_config["dim"] = config.get("teacher_dim", 16)
+        teacher_config["num_blocks"] = config.get("teacher_num_blocks", [1, 2, 2, 2])
+        teacher_config["heads"] = config.get("teacher_heads", [1, 2, 4, 8])
+        teacher_config["num_refinement_blocks"] = config.get("teacher_num_refinement_blocks", 2)
         #! [TEACHER-STUDENT-261106] Teacher directly consumes
         # amplitude/sin(phase)/cos(phase), avoiding a 3->1 information bottleneck.
         teacher_config["inp_channels"] = 3
