@@ -201,9 +201,27 @@ class TeacherStudentAutoencoder(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.teacher_use_energy = RESTORMER_CONFIG.get("teacher_use_energy", False)
+        self.fixed_teacher_and_onn = RESTORMER_CONFIG.get("fixed_teacher_and_onn", False)
+        if self.fixed_teacher_and_onn:
+            self.encoder.requires_grad_(False)
+            self.decoder.teacher.requires_grad_(False)
+            self.decoder.teacher_input_projection.requires_grad_(False)
+            self.decoder.teacher_output_projection.requires_grad_(False)
+            self.decoder.fixed_teacher = True
+            self.train(self.training)
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.fixed_teacher_and_onn:
+            self.encoder.eval()
+            self.decoder.teacher.eval()
+            self.decoder.teacher_input_projection.eval()
+            self.decoder.teacher_output_projection.eval()
+        return self
 
     def forward(self, x):
-        energy = self.encoder(x)
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not self.fixed_teacher_and_onn):
+            energy = self.encoder(x)
         if isinstance(energy, (tuple, list)):
             energy = energy[0]
         field = get_sensor_field(self.encoder)
@@ -221,6 +239,33 @@ def teacher_input_from_field(field, use_energy=False):
 
 
 model = TeacherStudentAutoencoder(encoder, decoder).to(device)
+
+#! [FIXED-TEACHER] Load stage-1 weights before creating DDP and the optimizer.
+if model.fixed_teacher_and_onn and not TRAINING_CONFIG.get("resume_training", False):
+    teacher_path = RESTORMER_CONFIG.get("teacher_checkpoint_path", "")
+    if not teacher_path or not os.path.isfile(teacher_path):
+        raise FileNotFoundError(
+            "Set RESTORMER_261106_CONFIG['teacher_checkpoint_path'] to an existing "
+            "train_teacher_only.py checkpoint on this machine."
+        )
+    pretrained = torch.load(teacher_path, map_location="cpu", weights_only=False)
+    pretrained = pretrained.get("model_state_dict", pretrained)
+    pretrained = {key.removeprefix("module."): value for key, value in pretrained.items()}
+    for prefix, module in (
+        ("encoder.", model.encoder),
+        ("teacher.", model.decoder.teacher),
+        ("teacher_output_projection.", model.decoder.teacher_output_projection),
+    ):
+        state = {key[len(prefix):]: value for key, value in pretrained.items()
+                 if key.startswith(prefix)}
+        if not state:
+            raise KeyError(f"No {prefix} weights in teacher-only checkpoint: {teacher_path}")
+        module.load_state_dict(state, strict=True)
+    if is_main():
+        print(f"[FIXED-TEACHER] Loaded ONN + teacher: {teacher_path}")
+
+if model.fixed_teacher_and_onn and is_main():
+    print("[FIXED-TEACHER] ONN + teacher frozen; training student + feature adapters only.")
 
 if distributed:
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
@@ -285,7 +330,7 @@ optimizer_name = TRAINING_CONFIG["optimizer"]
 
 if optimizer_name == "AdamW":
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=TRAINING_CONFIG["learning_rate"],
         **TRAINING_CONFIG["optimizer_params"],
     )
@@ -385,6 +430,7 @@ def save_model(
     print(f"[SAVE] {weight_path}")
 
     ckpt = {
+        "fixed_teacher_and_onn": RESTORMER_CONFIG.get("fixed_teacher_and_onn", False),
         "model_state_dict": state,
         "epoch": epoch,
         "global_step": global_step,
@@ -439,6 +485,7 @@ def save_named_checkpoint(
     os.makedirs(base_dir, exist_ok=True)
 
     checkpoint = {
+        "fixed_teacher_and_onn": RESTORMER_CONFIG.get("fixed_teacher_and_onn", False),
         # Model
         "model_state_dict": get_model_state_dict(model),
 
@@ -477,7 +524,11 @@ def load_checkpoint(
     checkpoint = torch.load(
         path,
         map_location=device,
+        weights_only=False,
     )
+    if checkpoint.get("fixed_teacher_and_onn", False) != RESTORMER_CONFIG.get("fixed_teacher_and_onn", False):
+        raise ValueError("Resume checkpoint training mode differs from fixed_teacher_and_onn. "
+                         "Start stage 2 with resume_training=False and teacher_checkpoint_path.")
 
     # ---------------------------------------------------------
     # Model
@@ -843,7 +894,8 @@ def train_model(
                 feature_distill_loss = feature_distill_loss / len(student_features)
             loss = (
                 student_loss
-                + RESTORMER_CONFIG.get("teacher_loss_weight", 1.0) * teacher_loss
+                + (0.0 if RESTORMER_CONFIG.get("fixed_teacher_and_onn", False)
+                   else RESTORMER_CONFIG.get("teacher_loss_weight", 1.0)) * teacher_loss
                 + RESTORMER_CONFIG.get("distillation_loss_weight", 0.05) * distill_loss
                 + RESTORMER_CONFIG.get("feature_distillation_weight", 0.05) * feature_distill_loss
             )

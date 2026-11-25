@@ -352,14 +352,14 @@ AUTOENCODER_CONFIG = {
 #! [TEACHER-STUDENT-261106] Begin: Integrated teacher/student configuration
 RESTORMER_261106_CONFIG = dict(RESTORMER_CONFIG)
 RESTORMER_261106_CONFIG.update({
-    "teacher_dim": 16,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
+    "teacher_dim": 8,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
     # Attention heads for teacher at levels 1/2/3/latent.
     # Each value must divide the corresponding teacher channel count.
     "teacher_heads": [1, 2, 4, 8],  #! each head should be factors of teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
-    "teacher_num_blocks": [1, 1, 1, 1],
-    "teacher_num_refinement_blocks": 1,
+    "teacher_num_blocks": [4, 6, 6, 8],
+    "teacher_num_refinement_blocks": 3,
     "teacher_loss_weight": 1.0,
-    "distillation_loss_weight": 0.05,
+    "distillation_loss_weight": 0.0,
     "feature_distillation_weight": 0.05,
 })
 #! [TEACHER-STUDENT-261106] End: Integrated teacher/student configuration
@@ -393,10 +393,10 @@ TRAINING_CONFIG = {
 
 
     # ====== Resume training ======
-    "resume_training": True,  #! switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
+    "resume_training": False,  #! switch, if want to start trainging from checkpoint
+    "resume_checkpoint_path": "./checkpoints_weights/TeacherOnly_v1/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
     
-    "reset_scheduler_on_resume": True,  #! restart scheduler from resume_learning_rate
+    "reset_scheduler_on_resume": False,  #! restart scheduler from resume_learning_rate
     "resume_learning_rate": 1e-7,  # override checkpoint LR after loading
     "tensorboard_purge_step": 461,  # checkpoint epoch367 resumes at epoch368
     
@@ -458,9 +458,9 @@ TRAINING_CONFIG = {
 # --------------------------------------------------
 TESTING_CONFIG = {    
     # === Parallel ===
-    "distributed": False,
+    "distributed": True,  # Multi-GPU with torchrun; plain python uses one device.
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 128,
+    "batch_size": 128,  # Global total across all GPUs; must divide evenly by GPU count.
 
     # === Binary-output evaluation ===
     #!  When enabled, reconstruction output is thresholded before MSE/PSNR/SSIM.
@@ -468,7 +468,7 @@ TESTING_CONFIG = {
     "binary_threshold": 0.5,
 
     # # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v1',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/TeacherOnly_v1',  # Used by test_teacher_only.py
     "weight_save_name": 'best_model.pth',
 
     # Model input shift test: (vertical, horizontal), in pixels.
@@ -476,7 +476,7 @@ TESTING_CONFIG = {
     "input_shift": (0, 0),  #! translate the ONN input image
 
     # save config
-    "results_save_dir": './results/Restormer_ONN8LBlock_TS_v1',  #! check before testing.
+    "results_save_dir": './results/TeacherOnly_v1',  # Used by test_teacher_only.py
     # "results_save_dir": './results/Restormer_ONN8LBlock_TS_v1_analysis',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
@@ -514,11 +514,11 @@ LATENT_ANALYSIS_CONFIG = {
     "batch_size": 128,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/TeacherOnly_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_TS_v1_analysis1',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/TeacherOnly_v1_analysis1',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes

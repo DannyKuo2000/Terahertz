@@ -348,6 +348,9 @@ AUTOENCODER_CONFIG = {
 #! [TEACHER-STUDENT-261106] Begin: Integrated teacher/student configuration
 RESTORMER_261106_CONFIG = dict(RESTORMER_CONFIG)
 RESTORMER_261106_CONFIG.update({
+    # Stage 2: load a teacher-only checkpoint and freeze ONN + teacher.
+    "fixed_teacher_and_onn": False,
+    "teacher_checkpoint_path": "",  # Server path to teacher-only best_model.pth or full checkpoint.
     "teacher_use_energy": False,  # False: [amplitude, sin(phase), cos(phase)], True:  [energy=amplitude**2, sin(phase), cos(phase)]
     "teacher_dim": 16,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
     "teacher_heads": [1, 2, 4, 8],  #! each head should be factors of teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8

@@ -93,8 +93,9 @@ class Restormer(nn.Module):
         self._student_features.clear()
         self._teacher_features.clear()
         student_output = self.student(student_input)
-        teacher_output = self.teacher(self.teacher_input_projection(teacher_input))
-        teacher_output = self.teacher_output_projection(teacher_output)
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not getattr(self, "fixed_teacher", False)):
+            teacher_output = self.teacher(self.teacher_input_projection(teacher_input))
+            teacher_output = self.teacher_output_projection(teacher_output)
         return (
             student_output,
             teacher_output,
