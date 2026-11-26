@@ -300,10 +300,7 @@ OPTICAL_CHAIN = [
     {"type": "diffractive", "name": "Lens2ToCamera", "index": 5},
     {"type": "sensor", "name": "SensorLayer"},
 ]
-
-
-# Make the declarative chain available to ONN(config=ENCODER_CONFIG).
-# ENCODER_CONFIG["OPTICAL_CHAIN"] = OPTICAL_CHAIN
+ENCODER_CONFIG["OPTICAL_CHAIN"] = OPTICAL_CHAIN  #! Make the declarative chain available to ONN(config=ENCODER_CONFIG).
 
 # --------------------------------------------------
 # Restormer Configuration
@@ -352,6 +349,7 @@ AUTOENCODER_CONFIG = {
 #! [TEACHER-STUDENT-261106] Begin: Integrated teacher/student configuration
 RESTORMER_261106_CONFIG = dict(RESTORMER_CONFIG)
 RESTORMER_261106_CONFIG.update({
+    "teacher_use_energy": True,  # False: amplitude; True: intensity=amplitude**2. Phase channels stay unchanged.
     "teacher_dim": 8,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
     # Attention heads for teacher at levels 1/2/3/latent.
     # Each value must divide the corresponding teacher channel count.
@@ -375,10 +373,10 @@ TEACHER_ONLY_CONFIG.update({
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/TeacherOnly_v1",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/TeacherOnly_v1",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/TeacherOnly_v2",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/TeacherOnly_v2",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/TeacherOnly_v1/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/TeacherOnly_v2/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -394,7 +392,7 @@ TRAINING_CONFIG = {
 
     # ====== Resume training ======
     "resume_training": False,  #! switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/TeacherOnly_v1/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
+    "resume_checkpoint_path": "./checkpoints_weights/TeacherOnly_v2/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
     
     "reset_scheduler_on_resume": False,  #! restart scheduler from resume_learning_rate
     "resume_learning_rate": 1e-7,  # override checkpoint LR after loading
@@ -406,25 +404,25 @@ TRAINING_CONFIG = {
     "profile_steps": 0,  # how many iteration to print out extra info
 
     # === Parallel ===
-    "distributed": False,  #!
-    "num_workers": 0,  # using 0 in single GPU
+    "distributed": True,  #!
+    "num_workers": 3,  # using 0 in single GPU
     
     # === Memory and Time Optimization ===
     "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
     "grad_accum_steps": 1,  # number of mini batches  #!
     
     # === Training hyperparameters ===
-    "global_batch_size": 40,  #!
+    "global_batch_size": 200,  #!
     "epochs": 5000,
-    # "max_iterations": 700_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
-    "max_iterations": 1_500_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    "max_iterations": 650_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    # "max_iterations": 1_500_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
 
     # loss
     "loss": "L1",
 
     # Optimizer
     "optimizer": "AdamW",
-    "learning_rate": 3e-4,  # original learning rate: 3e-4
+    "learning_rate": 3*3e-4,  # original learning rate: 3e-4
     "optimizer_params": {  # params for AdamW
         "betas": (0.9, 0.999),
         "weight_decay": 1e-4,
@@ -435,8 +433,8 @@ TRAINING_CONFIG = {
     "scheduler_type": "CosineAnnealingLR",
     "scheduler_params": {
         # "T_max": 1_500_000,  # how many scheduler.step() to reach "eta_min"
-        "T_max": 250_000,
-        "eta_min": 1e-8,  # original eta_min: 1e-6,
+        "T_max": 650_000,
+        "eta_min": 5*1e-8,  # original eta_min: 1e-6,
     },
 
     # ====== Phase Local Contrast loss =======
@@ -468,7 +466,7 @@ TESTING_CONFIG = {
     "binary_threshold": 0.5,
 
     # # load config
-    "weight_save_dir": './checkpoints_weights/TeacherOnly_v1',  # Used by test_teacher_only.py
+    "weight_save_dir": './checkpoints_weights/TeacherOnly_v2',  # Used by test_teacher_only.py
     "weight_save_name": 'best_model.pth',
 
     # Model input shift test: (vertical, horizontal), in pixels.
@@ -476,8 +474,8 @@ TESTING_CONFIG = {
     "input_shift": (0, 0),  #! translate the ONN input image
 
     # save config
-    "results_save_dir": './results/TeacherOnly_v1',  # Used by test_teacher_only.py
-    # "results_save_dir": './results/Restormer_ONN8LBlock_TS_v1_analysis',  #! check before testing.
+    "results_save_dir": './results/TeacherOnly_v2',  # Used by test_teacher_only.py
+    # "results_save_dir": './results/Restormer_TeacherOnly_v2_analysis',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
     "save_frequency_domain_panels": True,  # save frequency domain comparison
@@ -514,11 +512,11 @@ LATENT_ANALYSIS_CONFIG = {
     "batch_size": 128,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/TeacherOnly_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/TeacherOnly_v2',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/TeacherOnly_v1_analysis1',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/TeacherOnly_v2_analysis1',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes

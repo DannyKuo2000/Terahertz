@@ -318,8 +318,8 @@ RESTORMER_CONFIG = {
     # Embedding & Blocks
     "dim": 8,                 # initial dim
     # "dim": 48,
-    # "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
-    "num_blocks": [2, 3, 3, 4],
+    "num_blocks": [4, 6, 6, 8],      # number of each RestormerBlock
+    # "num_blocks": [2, 3, 3, 4],
     "num_refinement_blocks": 3,
     "heads":  [1, 2, 4, 8],      # number of Multi-head Attention of each RestormerBlock
 
@@ -349,15 +349,15 @@ AUTOENCODER_CONFIG = {
 RESTORMER_261106_CONFIG = dict(RESTORMER_CONFIG)
 RESTORMER_261106_CONFIG.update({
     # Stage 2: load a teacher-only checkpoint and freeze ONN + teacher.
-    "fixed_teacher_and_onn": False,
-    "teacher_checkpoint_path": "",  # Server path to teacher-only best_model.pth or full checkpoint.
+    "fixed_teacher_and_onn": True,
+    "teacher_checkpoint_path": "checkpoints_weights/TeacherOnly_v1/best_model.pth",  # Server path to teacher-only best_model.pth or full checkpoint.
     "teacher_use_energy": False,  # False: [amplitude, sin(phase), cos(phase)], True:  [energy=amplitude**2, sin(phase), cos(phase)]
-    "teacher_dim": 16,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
+    "teacher_dim": 8,  #! dim in each layer: teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
     "teacher_heads": [1, 2, 4, 8],  #! each head should be factors of teacher_dim, teacher_dim*2, teacher_dim*4, teacher_dim*8
-    "teacher_num_blocks": [1, 1, 1, 1],
-    "teacher_num_refinement_blocks": 1,
+    "teacher_num_blocks": [4, 6, 6, 8],
+    "teacher_num_refinement_blocks": 3,
     "teacher_loss_weight": 1.0,
-    "distillation_loss_weight": 0.05,
+    "distillation_loss_weight": 0.0,
     "feature_distillation_weight": 0.05,
 })
 #! [TEACHER-STUDENT-261106] End: Integrated teacher/student configuration
@@ -367,10 +367,10 @@ RESTORMER_261106_CONFIG.update({
 # --------------------------------------------------
 TRAINING_CONFIG = {    
     # ====== Save path & model setting ======
-    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
-    "writer_save_path": "runs/Restormer_ONN8LBlock_TS_v1",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
+    "checkpoints_weights_save_dir": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v4",  #! check before training. e.g. ./checkpoints_weights/{run_file_name}
+    "writer_save_path": "runs/Restormer_ONN8LBlock_TS_v4",  #! check before training. TensorBoard save path, e.g. runs/{run_file_name}
     "csv_log_enabled": True,  # Enable CSV logging for per-epoch metrics  #! close to improve training speed
-    "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/training_log.csv",  #! check before trainging. CSV log file path
+    "csv_log_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v4/training_log.csv",  #! check before trainging. CSV log file path
     "best_model_name": "best_model.pth",  # Filename for the best model weights
     "last_model_name": "last_model.pth",  # Filename for the latest model weights
     "best_checkpoint_name": "best_checkpoint.pth",  # Filename for the best full checkpoint
@@ -385,10 +385,10 @@ TRAINING_CONFIG = {
 
 
     # ====== Resume training ======
-    "resume_training": True,  #! switch, if want to start trainging from checkpoint
-    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v1/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
+    "resume_training": False,  #! switch, if want to start trainging from checkpoint
+    "resume_checkpoint_path": "./checkpoints_weights/Restormer_ONN8LBlock_TS_v4/checkpoints/epoch460_loss0.0034_20261115_020058.pth",  #! full checkpoint
     
-    "reset_scheduler_on_resume": True,  #! restart scheduler from resume_learning_rate
+    "reset_scheduler_on_resume": False,  #! restart scheduler from resume_learning_rate
     "resume_learning_rate": 1e-7,  # override checkpoint LR after loading
     "tensorboard_purge_step": 461,  # checkpoint epoch367 resumes at epoch368
     
@@ -398,25 +398,25 @@ TRAINING_CONFIG = {
     "profile_steps": 0,  # how many iteration to print out extra info
 
     # === Parallel ===
-    "distributed": False,  #!
-    "num_workers": 0,  # using 0 in single GPU
+    "distributed": True,  #!
+    "num_workers": 3,  # using 0 in single GPU
     
     # === Memory and Time Optimization ===
     "use_amp": False,  #! Automatic Mixed Precision (AMP): for reduction calculation cost and memory. This may cause training error in optical simulation
     "grad_accum_steps": 1,  # number of mini batches  #!
     
     # === Training hyperparameters ===
-    "global_batch_size": 40,  #!
+    "global_batch_size": 200,  #!
     "epochs": 5000,
-    # "max_iterations": 700_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
-    "max_iterations": 1_500_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    "max_iterations": 625_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
+    # "max_iterations": 1_500_000,  #! Warning: need to change T_max in scheduler_params below if you change this value
 
     # loss
     "loss": "L1",
 
     # Optimizer
     "optimizer": "AdamW",
-    "learning_rate": 3e-4,  # original learning rate: 3e-4
+    "learning_rate": 3*3e-4,  # original learning rate: 3e-4
     "optimizer_params": {  # params for AdamW
         "betas": (0.9, 0.999),
         "weight_decay": 1e-4,
@@ -427,8 +427,8 @@ TRAINING_CONFIG = {
     "scheduler_type": "CosineAnnealingLR",
     "scheduler_params": {
         # "T_max": 1_500_000,  # how many scheduler.step() to reach "eta_min"
-        "T_max": 250_000,
-        "eta_min": 1e-8,  # original eta_min: 1e-6,
+        "T_max": 625_000,
+        "eta_min": 5*1e-8,  # original eta_min: 1e-6,
     },
 
     # ====== Phase Local Contrast loss =======
@@ -452,7 +452,7 @@ TESTING_CONFIG = {
     # === Parallel ===
     "distributed": False,
     "num_workers": 0,  # using 0 in single GPU
-    "batch_size": 128,
+    "batch_size": 128,  # Global batch size for test261106.py; split evenly across GPUs.
 
     # === Binary-output evaluation ===
     #!  When enabled, reconstruction output is thresholded before MSE/PSNR/SSIM.
@@ -460,7 +460,7 @@ TESTING_CONFIG = {
     "binary_threshold": 0.5,
 
     # # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v1',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v4',  #! check before testing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # Model input shift test: (vertical, horizontal), in pixels.
@@ -468,11 +468,15 @@ TESTING_CONFIG = {
     "input_shift": (0, 0),  #! translate the ONN input image
 
     # save config
-    "results_save_dir": './results/Restormer_ONN8LBlock_TS_v1',  #! check before testing.
-    # "results_save_dir": './results/Restormer_ONN8LBlock_TS_v1_analysis',  #! check before testing.
+    "results_save_dir": './results/Restormer_ONN8LBlock_TS_v4',  #! check before testing.
+    # "results_save_dir": './results/Restormer_ONN8LBlock_TS_v4_analysis',  #! check before testing.
     "results_save_name_suffix": '_metrics.json',
     "save_first_n_reconstructions": 10,
     "save_frequency_domain_panels": True,  # save frequency domain comparison
+    "save_latent_panel": True,  # Student's camera energy input; phase is diagnostic only.
+    "latent_projection_mode": "mean_abs",
+    "latent_resize_to_output": True,
+    "latent_cmap": "gray",
     "fixed_comparison_seed": 42,
     "fixed_comparison_count": 10,
     "save_mse_ranked_panels": True,  # generate MSE-ranked panels for the best, middle, and worst reconstructions
@@ -506,11 +510,11 @@ LATENT_ANALYSIS_CONFIG = {
     "batch_size": 512,
 
     # load config
-    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v1',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
+    "weight_save_dir": './checkpoints_weights/Restormer_ONN8LBlock_TS_v4',  #! check before analyzing. e.g.: ./checkpoints_weights/{run_name}/weights
     "weight_save_name": 'best_model.pth',
 
     # save config
-    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_TS_v1_analysis1',  #! check before analyzing.
+    "results_save_dir": './latent_analysis/Restormer_ONN8LBlock_TS_v4_analysis1',  #! check before analyzing.
     "results_save_name_suffix": '_metrics.json',
 
     # latent analysis modes

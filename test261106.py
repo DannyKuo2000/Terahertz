@@ -1,35 +1,15 @@
 """Student-only evaluation for the 261106 teacher/student experiment."""
-import json
-import math
-import os
-import random
-import csv
-import matplotlib.pyplot as plt
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
 import torch
-import torch.nn.functional as F
-from tqdm import tqdm
+import torch.nn as nn
 
 import config as cfg
-from dataset import get_dataloaders
-from model.Restormer261106 import Restormer
+from model.RestormerOfficial import Restormer
 from model.opticalSimulation import ONN
-
-
-def ssim_pt(img1, img2, window_size=11, C1=0.01**2, C2=0.03**2):
-    padding = window_size // 2
-    weight = torch.ones(
-        (1, 1, window_size, window_size), device=img1.device
-    ) / (window_size ** 2)
-    mu1 = F.conv2d(img1, weight, padding=padding)
-    mu2 = F.conv2d(img2, weight, padding=padding)
-    mu1_sq, mu2_sq, mu1_mu2 = mu1 ** 2, mu2 ** 2, mu1 * mu2
-    sigma1_sq = F.conv2d(img1 * img1, weight, padding=padding) - mu1_sq
-    sigma2_sq = F.conv2d(img2 * img2, weight, padding=padding) - mu2_sq
-    sigma12 = F.conv2d(img1 * img2, weight, padding=padding) - mu1_mu2
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
-        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    )
-    return ssim_map.mean().item()
+from testing_analysis import run_model_test, evaluate_reconstruction, ssim_pt
 
 
 def _remove_prefix(state_dict, prefix):
@@ -48,7 +28,7 @@ def load_student_checkpoint(checkpoint, encoder, decoder):
             checkpoint = {"model_state_dict": checkpoint}
 
     if "encoder_state_dict" in checkpoint:
-        encoder.load_state_dict(checkpoint["encoder_state_dict"], strict=True)
+        encoder.load_state_dict(_remove_prefix(checkpoint["encoder_state_dict"], "module."), strict=True)
     elif "model_state_dict" in checkpoint:
         state = _remove_prefix(checkpoint["model_state_dict"], "module.")
         encoder_state = {
@@ -78,84 +58,50 @@ def load_student_checkpoint(checkpoint, encoder, decoder):
     else:
         raise KeyError("Checkpoint has no student/decoder state")
 
-    decoder.load_student_state_dict(student_state, strict=True)
+    student_state = _remove_prefix(student_state, "module.")
+    if any(key.startswith("student.") for key in student_state):
+        student_state = {key[len("student."):]: value for key, value in student_state.items()
+                         if key.startswith("student.")}
+    student = getattr(decoder, "student", decoder)
+    student.load_state_dict(student_state, strict=True)
+
+
+class StudentOnlyAutoencoder(nn.Module):
+    """Evaluate the energy-only student without constructing a teacher."""
+    def __init__(self):
+        super().__init__()
+        self.encoder = ONN(cfg.ENCODER_CONFIG)
+        self.decoder = Restormer(cfg.RESTORMER_261106_CONFIG)
+
+    def forward(self, imgs):
+        energy = self.encoder(imgs)
+        if isinstance(energy, (tuple, list)):
+            energy = energy[0]
+        output = self.decoder(energy)
+        return output[0] if isinstance(output, (tuple, list)) else output
+
+
+def load_student_model(model, path, device):
+    # Full training checkpoints contain Python/NumPy RNG state.
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    load_student_checkpoint(checkpoint, model.encoder, model.decoder)
+
+
+def evaluate(settings, device, rank=0, world_size=1):
+    model = StudentOnlyAutoencoder().to(device)
+    checkpoint = Path(settings["weight_save_dir"]) / settings["weight_save_name"]
+    load_student_model(model, checkpoint, device)
+    return evaluate_reconstruction(model, checkpoint, cfg.DATASET_CONFIG, settings,
+                                   device, rank, world_size, "Student")
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    encoder = ONN(cfg.ENCODER_CONFIG).to(device)
-    decoder = Restormer(cfg.RESTORMER_261106_CONFIG).to(device)
-    checkpoint_path = os.path.join(
-        cfg.TESTING_CONFIG["weight_save_dir"],
-        cfg.TESTING_CONFIG.get("weight_save_name", "last_checkpoint.pth"),
-    )
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    load_student_checkpoint(checkpoint, encoder, decoder)
-    decoder.eval(); encoder.eval()
-    _, _, test_loader = get_dataloaders(cfg.DATASET_CONFIG, cfg.TESTING_CONFIG.get("batch_size", 32), cfg.TESTING_CONFIG.get("num_workers", 0), False)
-    total_sse = 0.0; total_count = 0; total_ssim = 0.0; sample_count = 0
-    per_sample = []; per_sample_ssim = []
-    all_imgs = []; all_outputs = []
-    with torch.no_grad():
-        for imgs, _ in tqdm(test_loader, desc="Testing"):
-            imgs = imgs.to(device)
-            energy = encoder(imgs)
-            if isinstance(energy, (tuple, list)):
-                energy = energy[0]
-            output = decoder.student(energy)
-            output = output[0] if isinstance(output, (tuple, list)) else output
-            total_sse += F.mse_loss(output, imgs, reduction="sum").item()
-            total_count += imgs.numel()
-            batch_mse = F.mse_loss(output, imgs, reduction="none").flatten(1).mean(1)
-            per_sample.extend(batch_mse.cpu().tolist())
-            for index in range(imgs.size(0)):
-                sample_ssim = ssim_pt(imgs[index:index + 1], output[index:index + 1])
-                total_ssim += sample_ssim
-                per_sample_ssim.append(sample_ssim)
-                sample_count += 1
-            all_imgs.append(imgs.cpu()); all_outputs.append(output.cpu())
-    mse = total_sse / total_count
-    psnr = float("inf") if mse <= 0 else -10.0 * torch.log10(torch.tensor(mse)).item()
-    ssim = total_ssim / max(1, sample_count)
-    print(f"Student test MSE: {mse:.8f}, PSNR: {psnr:.4f} dB, SSIM: {ssim:.6f}")
-
-    all_imgs = torch.cat(all_imgs, dim=0)
-    all_outputs = torch.cat(all_outputs, dim=0)
-    results_dir = cfg.TESTING_CONFIG["results_save_dir"]
-    os.makedirs(results_dir, exist_ok=True)
-    with open(os.path.join(results_dir, "metrics.json"), "w") as f:
-        json.dump({"MSE": mse, "PSNR": psnr, "SSIM": ssim, "count": len(per_sample)}, f, indent=2)
-
-    #! [TEACHER-STUDENT-261106] Added: Fixed-seed student comparison images
-    seed = int(cfg.TESTING_CONFIG.get("fixed_comparison_seed", 42))
-    count = min(int(cfg.TESTING_CONFIG.get("fixed_comparison_count", 10)), len(all_imgs))
-    indices = sorted(random.Random(seed).sample(range(len(all_imgs)), count))
-    fixed_dir = os.path.join(results_dir, f"fixed_comparison_seed_{seed}")
-    os.makedirs(fixed_dir, exist_ok=True)
-    for idx in indices:
-        image = all_imgs[idx].squeeze().numpy()
-        output = all_outputs[idx].squeeze().numpy()
-        sample_mse = per_sample[idx]
-        sample_psnr = float("inf") if sample_mse <= 0 else -10 * math.log10(sample_mse)
-        fig, axes = plt.subplots(1, 3, figsize=(9, 3))
-        axes[0].imshow(image, cmap="gray"); axes[0].set_title("GT")
-        axes[1].imshow(output, cmap="gray"); axes[1].set_title("Student")
-        axes[2].imshow(abs(image - output), cmap="magma"); axes[2].set_title("Abs Diff")
-        for axis in axes: axis.axis("off")
-        fig.suptitle(f"PSNR={sample_psnr:.4f} dB | ({idx:06d})")
-        plt.tight_layout()
-        plt.savefig(os.path.join(fixed_dir, f"PSNR_{sample_psnr:.2f}dB_({idx:06d}).png"), dpi=180)
-        plt.close(fig)
-
-    with open(os.path.join(results_dir, "per_sample_metrics.csv"), "w", newline="") as f:
-        writer = csv.writer(f); writer.writerow(["index", "mse", "psnr", "ssim"])
-        for idx, sample_mse in enumerate(per_sample):
-            writer.writerow([
-                idx,
-                sample_mse,
-                float("inf") if sample_mse <= 0 else -10 * math.log10(sample_mse),
-                per_sample_ssim[idx],
-            ])
+    settings = dict(cfg.TESTING_CONFIG)
+    # Optical phase remains available for simulation diagnostics, but is
+    # never an input to the student's reconstruction forward.
+    settings["show_teacher_input_channels"] = False
+    run_model_test(StudentOnlyAutoencoder, load_student_model,
+                   cfg.DATASET_CONFIG, settings, "Student")
 
 
 if __name__ == "__main__":

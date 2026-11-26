@@ -203,13 +203,14 @@ class TeacherOnlyAutoencoder(nn.Module):
         self.encoder = encoder
         self.teacher = teacher
         self.teacher_output_projection = output_projection
+        self.teacher_use_energy = RESTORMER_CONFIG.get("teacher_use_energy", False)
 
     def forward(self, x):
         energy = self.encoder(x)
         if isinstance(energy, (tuple, list)):
             energy = energy[0]
         field = get_sensor_field(self.encoder)
-        teacher_input = teacher_input_from_field(field)
+        teacher_input = teacher_input_from_field(field, use_energy=self.teacher_use_energy)
         teacher_output = self.teacher(self.teacher_input_projection(teacher_input))
         return self.teacher_output_projection(teacher_output)
 
@@ -218,10 +219,11 @@ class TeacherOnlyAutoencoder(nn.Module):
         return x
 
 
-def teacher_input_from_field(field):
+def teacher_input_from_field(field, use_energy=False):
     amplitude = torch.abs(field)
+    magnitude = amplitude.square() if use_energy else amplitude
     phase = torch.angle(field)
-    return torch.cat([amplitude, torch.sin(phase), torch.cos(phase)], dim=1)
+    return torch.cat([magnitude, torch.sin(phase), torch.cos(phase)], dim=1)
 
 
 model = TeacherOnlyAutoencoder(
